@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>den</title>
+  <style>
+    @font-face {
+      font-family: 'JetBrains Mono';
+      src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+      unicode-range: U+0000-00FF;
+    }
+    @font-face {
+      font-family: 'JetBrains Mono';
+      src: url('/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+      unicode-range: U+0100-024F;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      overflow: hidden;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    #game-canvas {
+      display: none;
+      position: absolute;
+    }
+    #crt-canvas {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      image-rendering: pixelated;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game-canvas" width="1280" height="800"></canvas>
+  <canvas id="crt-canvas"></canvas>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

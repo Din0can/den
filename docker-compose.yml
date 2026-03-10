@@ -1,0 +1,27 @@
+services:
+  app:
+    build: .
+    container_name: Dinos-den
+    restart: always
+    networks:
+      - proxy
+    labels:
+      description: "den.d1no.dev - Multiplayer CRT dungeon crawler"
+      maintainer: "Dino"
+      homepage: "https://den.d1no.dev"
+      com.docker.compose.project: "den"
+      traefik.enable: "true"
+      traefik.http.routers.den.rule: "Host(`den.d1no.dev`)"
+      traefik.http.routers.den.entrypoints: "websecure"
+      traefik.http.routers.den.tls.certresolver: "letsencrypt"
+      traefik.http.services.den.loadbalancer.server.port: "3000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  proxy:
+    external: true
