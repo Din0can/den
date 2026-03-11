@@ -12,6 +12,8 @@ export class GameMap {
     this.overlay = new Map();       // packed coord -> {char, color, passable}
     this.doors = new Map();         // packed coord -> door object
     this._allDoors = [];            // flat list for setDoorState lookup
+    this.infoPoints = new Map();    // packed coord -> info object
+    this._allInfos = [];            // flat list
   }
 
   /** Initialize map dimensions and allocate visibility arrays */
@@ -30,6 +32,8 @@ export class GameMap {
     this.overlay = new Map();
     this.doors = new Map();
     this._allDoors = [];
+    this.infoPoints = new Map();
+    this._allInfos = [];
   }
 
   /** Load from flat array (backward-compat: converts to chunks internally) */
@@ -39,6 +43,8 @@ export class GameMap {
     this.overlay = new Map();
     this.doors = new Map();
     this._allDoors = [];
+    this.infoPoints = new Map();
+    this._allInfos = [];
 
     // Convert flat array to chunks
     const chunksX = Math.ceil(width / CHUNK_SIZE);
@@ -74,6 +80,11 @@ export class GameMap {
           this._registerDoor(door);
         }
       }
+      if (chunk.infoPoints) {
+        for (const info of chunk.infoPoints) {
+          this._registerInfo(info);
+        }
+      }
     }
   }
 
@@ -86,15 +97,32 @@ export class GameMap {
       this._allDoors.push(door);
       ref = door;
     }
-    for (let i = 0; i < (ref.length || 1); i++) {
-      const tx = ref.orientation === 'horizontal' ? ref.x + i : ref.x;
-      const ty = ref.orientation === 'vertical' ? ref.y + i : ref.y;
-      this.doors.set(this._doorKey(tx, ty), ref);
+    const len = ref.length || 1;
+    // Hinge is always registered at (door.x, door.y)
+    this.doors.set(this._doorKey(ref.x, ref.y), ref);
+    if (ref.isOpen && len > 1) {
+      // Open multi-tile: register swung positions (not original non-hinge)
+      for (let i = 1; i < len; i++) {
+        let sx, sy;
+        switch (ref.swingDirection) {
+          case 'south': sx = ref.x; sy = ref.y + i; break;
+          case 'north': sx = ref.x; sy = ref.y - i; break;
+          case 'east':  sx = ref.x + i; sy = ref.y; break;
+          case 'west':  sx = ref.x - i; sy = ref.y; break;
+        }
+        this.doors.set(this._doorKey(sx, sy), ref);
+      }
+    } else {
+      // Closed (or single-tile): register at original positions
+      for (let i = 1; i < len; i++) {
+        const tx = ref.orientation === 'horizontal' ? ref.x + i : ref.x;
+        const ty = ref.orientation === 'vertical' ? ref.y + i : ref.y;
+        this.doors.set(this._doorKey(tx, ty), ref);
+      }
     }
   }
 
   getTile(x, y) {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return TILE.VOID;
     const { cx, cy, lx, ly } = worldToChunk(x, y);
     const chunk = this.chunks.get(chunkKey(cx, cy));
     if (!chunk) return TILE.VOID;
@@ -102,10 +130,14 @@ export class GameMap {
   }
 
   setTile(x, y, tile) {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return;
     const { cx, cy, lx, ly } = worldToChunk(x, y);
-    const chunk = this.chunks.get(chunkKey(cx, cy));
-    if (!chunk) return;
+    const key = chunkKey(cx, cy);
+    let chunk = this.chunks.get(key);
+    if (!chunk) {
+      // Auto-create chunk (admin painting beyond loaded area)
+      chunk = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+      this.chunks.set(key, chunk);
+    }
     chunk[chunkIndex(lx, ly)] = tile;
   }
 
@@ -194,16 +226,112 @@ export class GameMap {
     }
   }
 
-  setDoorState(doorId, isOpen) {
+  removeDoor(doorId) {
     const door = this._allDoors.find(d => d.id === doorId);
     if (!door) return;
-    door.isOpen = isOpen;
-    const tileType = isOpen ? TILE.DOOR_OPEN : TILE.DOOR_CLOSED;
     for (let i = 0; i < (door.length || 1); i++) {
       const tx = door.orientation === 'horizontal' ? door.x + i : door.x;
       const ty = door.orientation === 'vertical' ? door.y + i : door.y;
-      this.setTile(tx, ty, tileType);
+      this.doors.delete(this._doorKey(tx, ty));
     }
+    this._allDoors = this._allDoors.filter(d => d.id !== doorId);
+  }
+
+  setDoorState(doorId, isOpen, tileChanges) {
+    const door = this._allDoors.find(d => d.id === doorId);
+    if (!door) return;
+    door.isOpen = isOpen;
+
+    if (tileChanges && tileChanges.length > 0) {
+      // Server provided explicit tile changes (multi-tile swing)
+      for (const { x, y, tile } of tileChanges) {
+        this.setTile(x, y, tile);
+      }
+      this._updateDoorPositions(door, isOpen);
+    } else {
+      // Single-tile fallback (current behavior)
+      const tileType = isOpen ? TILE.DOOR_OPEN : TILE.DOOR_CLOSED;
+      for (let i = 0; i < (door.length || 1); i++) {
+        const tx = door.orientation === 'horizontal' ? door.x + i : door.x;
+        const ty = door.orientation === 'vertical' ? door.y + i : door.y;
+        this.setTile(tx, ty, tileType);
+      }
+    }
+  }
+
+  /** Update door position registrations for swing open/close */
+  _updateDoorPositions(door, isOpen) {
+    const len = door.length || 1;
+    if (len <= 1) return;
+
+    if (isOpen) {
+      // Unregister non-hinge original positions, register swung positions
+      for (let i = 1; i < len; i++) {
+        const tx = door.orientation === 'horizontal' ? door.x + i : door.x;
+        const ty = door.orientation === 'vertical' ? door.y + i : door.y;
+        this.doors.delete(this._doorKey(tx, ty));
+      }
+      for (let i = 1; i < len; i++) {
+        let sx, sy;
+        switch (door.swingDirection) {
+          case 'south': sx = door.x; sy = door.y + i; break;
+          case 'north': sx = door.x; sy = door.y - i; break;
+          case 'east':  sx = door.x + i; sy = door.y; break;
+          case 'west':  sx = door.x - i; sy = door.y; break;
+        }
+        this.doors.set(this._doorKey(sx, sy), door);
+      }
+    } else {
+      // Unregister swung positions, re-register original positions
+      for (let i = 1; i < len; i++) {
+        let sx, sy;
+        switch (door.swingDirection) {
+          case 'south': sx = door.x; sy = door.y + i; break;
+          case 'north': sx = door.x; sy = door.y - i; break;
+          case 'east':  sx = door.x + i; sy = door.y; break;
+          case 'west':  sx = door.x - i; sy = door.y; break;
+        }
+        this.doors.delete(this._doorKey(sx, sy));
+      }
+      for (let i = 1; i < len; i++) {
+        const tx = door.orientation === 'horizontal' ? door.x + i : door.x;
+        const ty = door.orientation === 'vertical' ? door.y + i : door.y;
+        this.doors.set(this._doorKey(tx, ty), door);
+      }
+    }
+  }
+
+  // --- Info points ---
+  _infoKey(x, y) {
+    return (x << 16) | (y & 0xFFFF);
+  }
+
+  _registerInfo(info) {
+    if (this._allInfos.find(i => i.id === info.id)) return;
+    this._allInfos.push(info);
+    this.infoPoints.set(this._infoKey(info.x, info.y), info);
+  }
+
+  getInfoAt(x, y) {
+    return this.infoPoints.get(this._infoKey(x, y)) || null;
+  }
+
+  /** Get all info points within manhattan distance of (px, py) */
+  getInfoNear(px, py, dist = 1) {
+    const result = [];
+    for (const info of this._allInfos) {
+      if (Math.abs(info.x - px) + Math.abs(info.y - py) <= dist) {
+        result.push(info);
+      }
+    }
+    return result;
+  }
+
+  removeInfo(infoId) {
+    const info = this._allInfos.find(i => i.id === infoId);
+    if (!info) return;
+    this.infoPoints.delete(this._infoKey(info.x, info.y));
+    this._allInfos = this._allInfos.filter(i => i.id !== infoId);
   }
 
   /** Get bounds of the map in world coordinates */

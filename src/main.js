@@ -151,7 +151,7 @@ function init() {
   });
 
   network.onDoorState((data) => {
-    gameMap.setDoorState(data.doorId, data.isOpen);
+    gameMap.setDoorState(data.doorId, data.isOpen, data.tiles);
     fovDirty = true;
   });
 
@@ -239,8 +239,11 @@ function gameLoop(now) {
   // HUD
   updateHUD(playerName, localEntity.x, localEntity.y, remotePlayers.size + 1, currentLayerId);
 
+  // Gather nearby info hologram text
+  const nearbyInfos = gameMap.getInfoNear(localEntity.x, localEntity.y, 1);
+
   // Render
-  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile);
+  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos);
   renderHud(hudInfo);
 }
 

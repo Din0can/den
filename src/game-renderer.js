@@ -40,34 +40,30 @@ function drawDoor(px, py, door) {
   ctx.fillStyle = typeColor;
 
   if (door.isOpen) {
-    const swing = door.swingDirection;
-    if (door.orientation === 'horizontal') {
-      if (swing === 'south') {
-        // Top-edge bar character
-        ctx.fillText('▔', px + 2, py + 1);
-      } else {
-        // Bottom-edge thin bar
-        ctx.fillRect(px, py + TILE_SIZE - 2, TILE_SIZE, 2);
-      }
-    } else {
-      if (swing === 'east') {
-        // Left-edge thin bar
-        ctx.fillRect(px, py, 2, TILE_SIZE);
-      } else {
-        // Right-edge thin bar
-        ctx.fillRect(px + TILE_SIZE - 2, py, 2, TILE_SIZE);
-      }
-    }
-  } else {
     if (door.orientation === 'horizontal') {
       ctx.fillText('┃', px + 2, py + 1);
     } else {
       ctx.fillText('━', px + 2, py + 1);
     }
+  } else {
+    const swing = door.swingDirection;
+    if (door.orientation === 'horizontal') {
+      if (swing === 'south') {
+        ctx.fillText('▔', px + 2, py + 1);
+      } else {
+        ctx.fillRect(px, py + TILE_SIZE - 2, TILE_SIZE, 2);
+      }
+    } else {
+      if (swing === 'east') {
+        ctx.fillRect(px, py, 2, TILE_SIZE);
+      } else {
+        ctx.fillRect(px + TILE_SIZE - 2, py, 2, TILE_SIZE);
+      }
+    }
   }
 }
 
-export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt) {
+export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos) {
   const viewRows = viewport.rows;
 
   // Clear to black
@@ -167,12 +163,33 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
     const tw = ctx.measureText(label).width;
     const px = sx + TILE_SIZE / 2 - tw / 2;
     const py = sy - 14;
-    // Dark background pill
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(px - 4, py - 2, tw + 8, 14);
-    // Text
     ctx.fillStyle = '#cccccc';
     ctx.fillText(label, px, py);
+    ctx.font = FONT;
+  }
+
+  // Info point hologram text
+  if (nearbyInfos && nearbyInfos.length > 0) {
+    ctx.font = NAME_FONT;
+    ctx.textBaseline = 'top';
+    for (const info of nearbyInfos) {
+      const ix = (info.x - camera.x) * TILE_SIZE;
+      const iy = (info.y - camera.y) * TILE_SIZE;
+      const tw = ctx.measureText(info.text).width;
+      const px = ix + TILE_SIZE / 2 - tw / 2;
+      const py = iy - 16;
+      // Dark background pill
+      ctx.fillStyle = 'rgba(0,20,20,0.75)';
+      ctx.fillRect(px - 5, py - 2, tw + 10, 15);
+      ctx.strokeStyle = 'rgba(0,204,204,0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(px - 5, py - 2, tw + 10, 15);
+      // Cyan text
+      ctx.fillStyle = '#00cccc';
+      ctx.fillText(info.text, px, py);
+    }
     ctx.font = FONT;
   }
 }

@@ -1,6 +1,6 @@
 // Server-side layer management — chunk-based storage, static + dynamic layers
 
-import { CHUNK_SIZE, chunkKey, parseChunkKey, worldToChunk, chunkIndex } from './src/chunk.js';
+import { CHUNK_SIZE, chunkKey, parseChunkKey, worldToChunk, chunkToWorld, chunkIndex } from './src/chunk.js';
 
 const TILE_VOID = 0;
 const TILE_WALL = 1;
@@ -26,11 +26,19 @@ export class StaticLayer {
     this.players = new Set();
     this.bounds = { minX: 0, minY: 0, maxX: dungeonData.width, maxY: dungeonData.height };
 
-    // Chunk storage: chunkKey -> { tiles, overlay, doors }
+    // Entry points for inter-layer navigation
+    this.entryUp = dungeonData.entryUp || null;     // {x,y} — sends players UP
+    this.entryDown = dungeonData.entryDown || null;  // {x,y} — sends players DOWN
+
+    // Info points: [{id, x, y, text}, ...]
+    this.infoPoints = dungeonData.infoPoints || [];
+
+    // Chunk storage: chunkKey -> { tiles, overlay, doors, infoPoints }
     this.chunks = new Map();
     this._chunkify(dungeonData.map, dungeonData.width, dungeonData.height);
     this._distributeOverlay(dungeonData.overlay);
     this._distributeDoors();
+    this._distributeInfoPoints();
   }
 
   /** Convert flat map array to chunks */
@@ -49,7 +57,7 @@ export class StaticLayer {
             }
           }
         }
-        this.chunks.set(chunkKey(cx, cy), { tiles, overlay: [], doors: [] });
+        this.chunks.set(chunkKey(cx, cy), { tiles, overlay: [], doors: [], infoPoints: [] });
       }
     }
   }
@@ -85,6 +93,58 @@ export class StaticLayer {
     }
   }
 
+  /** Assign info points to their respective chunks */
+  _distributeInfoPoints() {
+    if (!this.infoPoints) return;
+    for (const info of this.infoPoints) {
+      const { cx, cy } = worldToChunk(info.x, info.y);
+      const key = chunkKey(cx, cy);
+      const chunk = this.chunks.get(key);
+      if (chunk) chunk.infoPoints.push(info);
+    }
+  }
+
+  /** Expand bounds to include position (x, y). Handles empty initial state. */
+  _expandBounds(x, y) {
+    if (this.bounds.minX === 0 && this.bounds.maxX === 0 && this.bounds.minY === 0 && this.bounds.maxY === 0) {
+      // First tile placed on an empty layer
+      this.bounds = { minX: x, minY: y, maxX: x + 1, maxY: y + 1 };
+    } else {
+      if (x < this.bounds.minX) this.bounds.minX = x;
+      if (y < this.bounds.minY) this.bounds.minY = y;
+      if (x + 1 > this.bounds.maxX) this.bounds.maxX = x + 1;
+      if (y + 1 > this.bounds.maxY) this.bounds.maxY = y + 1;
+    }
+  }
+
+  /** Serialize layer to JSON for persistence (chunk-based format) */
+  toJSON() {
+    const chunks = {};
+    for (const [key, chunk] of this.chunks) {
+      // Only save non-empty chunks
+      let hasContent = false;
+      for (let i = 0; i < chunk.tiles.length; i++) {
+        if (chunk.tiles[i] !== TILE_VOID) { hasContent = true; break; }
+      }
+      if (!hasContent && (!chunk.overlay || chunk.overlay.length === 0)) continue;
+      chunks[key] = {
+        tiles: Array.from(chunk.tiles),
+        overlay: chunk.overlay || [],
+      };
+    }
+
+    return {
+      format: 'chunks',
+      bounds: this.bounds,
+      chunks,
+      rooms: this.rooms,
+      doors: this.doors,
+      infoPoints: this.infoPoints,
+      entryUp: this.entryUp,
+      entryDown: this.entryDown,
+    };
+  }
+
   getTile(x, y) {
     const { cx, cy, lx, ly } = worldToChunk(x, y);
     const chunk = this.chunks.get(chunkKey(cx, cy));
@@ -114,6 +174,23 @@ export class StaticLayer {
     return { x: Math.floor(this.bounds.maxX / 2), y: Math.floor(this.bounds.maxY / 2) };
   }
 
+  /** Get spawn point based on arrival direction */
+  getSpawnForArrival(fromDirection) {
+    if (fromDirection === 'above' && this.entryUp) return { ...this.entryUp };
+    if (fromDirection === 'below' && this.entryDown) return { ...this.entryDown };
+    return this.getSpawn();
+  }
+
+  /** Ensure chunk exists at given world position, creating if needed */
+  ensureChunkAt(x, y) {
+    const { cx, cy } = worldToChunk(x, y);
+    const key = chunkKey(cx, cy);
+    if (!this.chunks.has(key)) {
+      this.chunks.set(key, { tiles: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE), overlay: [], doors: [], infoPoints: [] });
+    }
+    return this.chunks.get(key);
+  }
+
   /** Get serializable chunk data for a list of chunk keys */
   getChunksByKeys(keys) {
     const result = [];
@@ -126,6 +203,7 @@ export class StaticLayer {
           tiles: Array.from(chunk.tiles),
           overlay: chunk.overlay,
           doors: chunk.doors,
+          infoPoints: chunk.infoPoints,
         });
       }
     }
@@ -151,7 +229,96 @@ export class StaticLayer {
       id: this.id,
       type: this.type,
       bounds: this.bounds,
+      entryUp: this.entryUp,
+      entryDown: this.entryDown,
     };
+  }
+
+  /** Add a door to the layer and distribute to chunks */
+  addDoor(door) {
+    this.doors.push(door);
+    const touchedChunks = new Set();
+    for (let i = 0; i < (door.length || 1); i++) {
+      const tx = door.orientation === 'horizontal' ? door.x + i : door.x;
+      const ty = door.orientation === 'vertical' ? door.y + i : door.y;
+      const { cx, cy } = worldToChunk(tx, ty);
+      const key = chunkKey(cx, cy);
+      if (!touchedChunks.has(key)) {
+        touchedChunks.add(key);
+        const chunk = this.chunks.get(key);
+        if (chunk) chunk.doors.push(door);
+      }
+    }
+  }
+
+  /** Remove a door by ID, returns the removed door or null */
+  removeDoor(doorId) {
+    const idx = this.doors.findIndex(d => d.id === doorId);
+    if (idx < 0) return null;
+    const door = this.doors[idx];
+    this.doors.splice(idx, 1);
+    for (const [, chunk] of this.chunks) {
+      const ci = chunk.doors.findIndex(d => d.id === doorId);
+      if (ci >= 0) chunk.doors.splice(ci, 1);
+    }
+    return door;
+  }
+
+  /** Find door at world position */
+  getDoorAt(x, y) {
+    for (const door of this.doors) {
+      for (let i = 0; i < (door.length || 1); i++) {
+        const tx = door.orientation === 'horizontal' ? door.x + i : door.x;
+        const ty = door.orientation === 'vertical' ? door.y + i : door.y;
+        if (tx === x && ty === y) return door;
+      }
+    }
+    return null;
+  }
+
+  /** Get next available door ID */
+  getNextDoorId() {
+    let maxId = 0;
+    for (const door of this.doors) {
+      if (door.id > maxId) maxId = door.id;
+    }
+    return maxId + 1;
+  }
+
+  /** Add an info point to the layer and distribute to chunks */
+  addInfoPoint(info) {
+    this.infoPoints.push(info);
+    const { cx, cy } = worldToChunk(info.x, info.y);
+    const key = chunkKey(cx, cy);
+    const chunk = this.chunks.get(key);
+    if (chunk) chunk.infoPoints.push(info);
+  }
+
+  /** Remove an info point by ID, returns the removed info or null */
+  removeInfoPoint(infoId) {
+    const idx = this.infoPoints.findIndex(i => i.id === infoId);
+    if (idx < 0) return null;
+    const info = this.infoPoints[idx];
+    this.infoPoints.splice(idx, 1);
+    for (const [, chunk] of this.chunks) {
+      const ci = chunk.infoPoints.findIndex(i => i.id === infoId);
+      if (ci >= 0) chunk.infoPoints.splice(ci, 1);
+    }
+    return info;
+  }
+
+  /** Find info point at world position */
+  getInfoAt(x, y) {
+    return this.infoPoints.find(i => i.x === x && i.y === y) || null;
+  }
+
+  /** Get next available info point ID */
+  getNextInfoId() {
+    let maxId = 0;
+    for (const info of this.infoPoints) {
+      if (info.id > maxId) maxId = info.id;
+    }
+    return maxId + 1;
   }
 
   addPlayer(socketId) { this.players.add(socketId); }
@@ -393,7 +560,43 @@ export class LayerManager {
   createStaticLayer(id, dungeonData) {
     const layer = new StaticLayer(id, dungeonData);
     this.layers.set(id, layer);
-    console.log(`Layer ${id} created (static, ${dungeonData.width}x${dungeonData.height})`);
+    if (dungeonData.width > 0 || dungeonData.height > 0) {
+      console.log(`Layer ${id} created (static, ${dungeonData.width}x${dungeonData.height})`);
+    }
+    return layer;
+  }
+
+  createBlankStaticLayer(id) {
+    const data = {
+      map: new Uint8Array(0), width: 0, height: 0,
+      rooms: [], doors: [], overlay: [],
+      entryUp: null, entryDown: null,
+    };
+    return this.createStaticLayer(id, data);
+  }
+
+  /** Create a static layer from chunk-based saved data */
+  createStaticLayerFromChunks(id, data) {
+    const layer = this.createBlankStaticLayer(id);
+    // Load chunks directly
+    for (const [key, chunkData] of Object.entries(data.chunks)) {
+      layer.chunks.set(key, {
+        tiles: new Uint8Array(chunkData.tiles),
+        overlay: chunkData.overlay || [],
+        doors: [],
+        infoPoints: [],
+      });
+    }
+    layer.bounds = data.bounds || { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+    layer.rooms = data.rooms || [];
+    layer.doors = data.doors || [];
+    layer.infoPoints = data.infoPoints || [];
+    layer.entryUp = data.entryUp || null;
+    layer.entryDown = data.entryDown || null;
+    layer._distributeDoors();
+    layer._distributeInfoPoints();
+    const b = layer.bounds;
+    console.log(`Layer ${id} restored (static chunks, ${b.maxX - b.minX}x${b.maxY - b.minY}, ${Object.keys(data.chunks).length} chunks)`);
     return layer;
   }
 

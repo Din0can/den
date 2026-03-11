@@ -129,6 +129,230 @@
     #layer-info .label {
       color: #888;
     }
+    .edit-btn {
+      font-size: 10px;
+      padding: 1px 5px;
+      background: #333;
+      color: #aaa;
+      border: 1px solid #555;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+      margin-left: 4px;
+    }
+    .edit-btn:hover {
+      background: #444;
+      color: #fff;
+    }
+    #btn-new-layer {
+      display: block;
+      width: 100%;
+      padding: 6px;
+      margin-bottom: 8px;
+      background: #1a2a1a;
+      color: #6a6;
+      border: 1px solid #3a5a3a;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    #btn-new-layer:hover {
+      background: #2a3a2a;
+      color: #8c8;
+    }
+    #new-layer-form {
+      margin-bottom: 8px;
+      padding: 8px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 3px;
+    }
+    #new-layer-form input {
+      width: 100%;
+      margin-bottom: 4px;
+      padding: 4px 6px;
+      background: #222;
+      color: #ccc;
+      border: 1px solid #444;
+      border-radius: 2px;
+      font-family: inherit;
+      font-size: 11px;
+    }
+    #new-layer-form .form-row {
+      display: flex;
+      gap: 4px;
+    }
+    #new-layer-form .form-row input {
+      flex: 1;
+    }
+    #new-layer-form button {
+      padding: 4px 8px;
+      font-family: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      border-radius: 2px;
+      border: 1px solid #444;
+    }
+    #btn-create-layer {
+      background: #2a3a2a;
+      color: #8c8;
+    }
+    #btn-cancel-create {
+      background: #333;
+      color: #aaa;
+    }
+    /* Editor panel */
+    #sidebar-editor h2 {
+      font-size: 13px;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+    #editor-dims {
+      font-size: 10px;
+      color: #666;
+      margin-bottom: 10px;
+    }
+    .tools-label {
+      font-size: 10px;
+      color: #666;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    #editor-tools {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      margin-bottom: 10px;
+    }
+    .tool-btn {
+      width: 36px;
+      height: 28px;
+      font-family: inherit;
+      font-size: 11px;
+      background: #222;
+      color: #aaa;
+      border: 1px solid #444;
+      border-radius: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .tool-btn:hover {
+      background: #333;
+      color: #fff;
+    }
+    .tool-btn.active {
+      background: #2a2a4a;
+      color: #aaf;
+      border-color: #6a6aff;
+    }
+    #editor-brush {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 10px;
+      font-size: 11px;
+    }
+    #editor-brush button {
+      width: 22px;
+      height: 22px;
+      font-family: inherit;
+      font-size: 13px;
+      background: #222;
+      color: #aaa;
+      border: 1px solid #444;
+      border-radius: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #editor-brush button:hover {
+      background: #333;
+      color: #fff;
+    }
+    #editor-palette {
+      max-height: 320px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+    }
+    .palette-category {
+      font-size: 9px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin: 4px 0 2px;
+    }
+    .palette-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      margin-bottom: 2px;
+    }
+    .palette-swatch {
+      width: 28px;
+      height: 24px;
+      font-family: 'Kraken-Primary', 'JetBrains Mono', monospace;
+      font-size: 13px;
+      background: #111;
+      border: 2px solid #333;
+      border-radius: 2px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .palette-swatch:hover {
+      border-color: #888;
+    }
+    .palette-swatch.active {
+      border-color: #fff;
+      background: #222;
+    }
+    #editor-entries {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 10px;
+      line-height: 1.6;
+    }
+    #editor-entries .entry-label {
+      color: #666;
+    }
+    #btn-save-exit {
+      display: block;
+      width: 100%;
+      padding: 6px;
+      margin-bottom: 6px;
+      background: #2a2a4a;
+      color: #aaf;
+      border: 1px solid #6a6aff;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    #btn-save-exit:hover {
+      background: #3a3a5a;
+    }
+    #btn-delete-layer {
+      display: block;
+      width: 100%;
+      padding: 6px;
+      background: #2a1a1a;
+      color: #a66;
+      border: 1px solid #5a3a3a;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+    }
+    #btn-delete-layer:hover {
+      background: #3a2a2a;
+      color: #c88;
+    }
     #admin-canvas {
       flex: 1;
       image-rendering: pixelated;
@@ -137,9 +361,49 @@
 </head>
 <body>
   <div id="sidebar">
-    <h2>Layers</h2>
-    <ul id="layer-list"></ul>
-    <div id="layer-info"></div>
+    <div id="sidebar-layers">
+      <h2>Layers</h2>
+      <button id="btn-new-layer">+ New Layer</button>
+      <div id="new-layer-form" style="display:none">
+        <input id="new-layer-id" type="number" placeholder="Layer ID" min="0">
+        <div class="form-row" style="margin-top:4px">
+          <button id="btn-create-layer">Create</button>
+          <button id="btn-cancel-create">Cancel</button>
+        </div>
+      </div>
+      <ul id="layer-list"></ul>
+      <div id="layer-info"></div>
+    </div>
+    <div id="sidebar-editor" style="display:none">
+      <h2 id="editor-title">Editing L0</h2>
+      <div id="editor-dims"></div>
+      <div class="tools-label">Tools</div>
+      <div id="editor-tools">
+        <button class="tool-btn active" data-tool="draw" title="Draw (D)">D</button>
+        <button class="tool-btn" data-tool="fill" title="Fill (F)">F</button>
+        <button class="tool-btn" data-tool="erase" title="Erase (X)">X</button>
+        <button class="tool-btn" data-tool="entry-down" title="Entry Down">E&#x2193;</button>
+        <button class="tool-btn" data-tool="entry-up" id="tool-entry-up" title="Entry Up">E&#x2191;</button>
+        <button class="tool-btn" data-tool="door-wood" title="Wood Door" style="color:#8B4513">&#x2503;</button>
+        <button class="tool-btn" data-tool="door-metal" title="Metal Door" style="color:#708090">&#x2503;</button>
+        <button class="tool-btn" data-tool="info" title="Info Point (I)" style="color:#00cccc">i</button>
+      </div>
+      <div class="tools-label">Brush</div>
+      <div id="editor-brush">
+        <button id="brush-dec">-</button>
+        <span id="brush-size">1</span>
+        <button id="brush-inc">+</button>
+      </div>
+      <div class="tools-label">Tiles</div>
+      <div id="editor-palette"></div>
+      <div class="tools-label">Entries</div>
+      <div id="editor-entries">
+        <span class="entry-label">E&#x2193;:</span> <span id="entry-down-pos">not set</span><br>
+        <span class="entry-label">E&#x2191;:</span> <span id="entry-up-pos">not set</span>
+      </div>
+      <button id="btn-save-exit">Save & Exit</button>
+      <button id="btn-delete-layer">Delete Layer</button>
+    </div>
   </div>
   <canvas id="admin-canvas"></canvas>
   <script type="module" src="/src/admini.js"></script>
