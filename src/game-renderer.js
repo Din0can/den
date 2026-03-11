@@ -1,127 +1,178 @@
-import {
-  GAME_WIDTH, GAME_HEIGHT, TILE_SIZE, VIEWPORT_COLS, VIEWPORT_ROWS, HUD_ROWS,
-  TILE, COLORS, WALL_CHARS, FLOOR_CHARS
-} from './config.js';
+import { TILE_SIZE, TILE, TILE_META, COLORS } from './config.js';
+import { viewport } from './viewport.js';
 
 let ctx;
 const FONT_SIZE = TILE_SIZE;
 const FONT = `${FONT_SIZE}px 'JetBrains Mono', monospace`;
+const NAME_FONT = `${FONT_SIZE - 6}px 'JetBrains Mono', monospace`;
 
 export function initRenderer(canvas) {
   ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
 }
 
-/** Simple seeded hash for floor variety */
-function tileHash(x, y) {
-  let h = (x * 374761393 + y * 668265263) | 0;
-  h = ((h ^ (h >> 13)) * 1274126177) | 0;
-  return (h ^ (h >> 16)) >>> 0;
+/** Facing rotation angles */
+const FACING_ROTATION = {
+  south: 0,
+  west: Math.PI / 2,
+  north: Math.PI,
+  east: -Math.PI / 2,
+};
+
+/** Draw a character rotated based on facing direction */
+function drawRotatedChar(char, px, py, color, facing) {
+  const rotation = FACING_ROTATION[facing] || 0;
+  ctx.fillStyle = color;
+  if (rotation === 0) {
+    ctx.fillText(char, px + 2, py + 1);
+  } else {
+    ctx.save();
+    ctx.translate(px + TILE_SIZE / 2, py + TILE_SIZE / 2);
+    ctx.rotate(rotation);
+    ctx.fillText(char, -TILE_SIZE / 2 + 2, -TILE_SIZE / 2 + 1);
+    ctx.restore();
+  }
 }
 
-export function render(gameMap, camera, localEntity, entities, hudInfo) {
-  const viewRows = VIEWPORT_ROWS - HUD_ROWS;
+/** Draw a door tile using Kraken2004-style characters and thin bars */
+function drawDoor(px, py, door) {
+  const typeColor = door.type === 'metal' ? '#708090' : '#8B4513';
+  ctx.fillStyle = typeColor;
+
+  if (door.isOpen) {
+    const swing = door.swingDirection;
+    if (door.orientation === 'horizontal') {
+      if (swing === 'south') {
+        // Top-edge bar character
+        ctx.fillText('▔', px + 2, py + 1);
+      } else {
+        // Bottom-edge thin bar
+        ctx.fillRect(px, py + TILE_SIZE - 2, TILE_SIZE, 2);
+      }
+    } else {
+      if (swing === 'east') {
+        // Left-edge thin bar
+        ctx.fillRect(px, py, 2, TILE_SIZE);
+      } else {
+        // Right-edge thin bar
+        ctx.fillRect(px + TILE_SIZE - 2, py, 2, TILE_SIZE);
+      }
+    }
+  } else {
+    if (door.orientation === 'horizontal') {
+      ctx.fillText('┃', px + 2, py + 1);
+    } else {
+      ctx.fillText('━', px + 2, py + 1);
+    }
+  }
+}
+
+export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt) {
+  const viewRows = viewport.rows;
 
   // Clear to black
   ctx.fillStyle = COLORS.VOID_BG;
-  ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+  ctx.fillRect(0, 0, viewport.gameWidth, viewport.gameHeight);
 
   ctx.font = FONT;
   ctx.textBaseline = 'top';
 
-  // Draw visible tiles
+  // Draw tiles at full brightness (fog overlay handles dimming)
   for (let row = 0; row < viewRows; row++) {
-    for (let col = 0; col < VIEWPORT_COLS; col++) {
+    for (let col = 0; col < viewport.cols; col++) {
       const mx = camera.x + col;
       const my = camera.y + row;
-      const tile = gameMap.getTile(mx, my);
 
       const px = col * TILE_SIZE;
       const py = row * TILE_SIZE;
 
-      if (tile === TILE.WALL) {
-        ctx.fillStyle = COLORS.WALL_BG;
-        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-        ctx.fillStyle = COLORS.WALL_FG;
-        const ch = WALL_CHARS[tileHash(mx, my) % WALL_CHARS.length];
-        ctx.fillText(ch, px + 2, py + 1);
-      } else if (tile === TILE.FLOOR) {
-        ctx.fillStyle = COLORS.FLOOR_BG;
-        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-        ctx.fillStyle = COLORS.FLOOR_FG;
-        const ch = FLOOR_CHARS[tileHash(mx, my) % FLOOR_CHARS.length];
-        ctx.fillText(ch, px + 2, py + 1);
-      } else if (tile === TILE.DOOR) {
-        ctx.fillStyle = COLORS.FLOOR_BG;
-        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-        ctx.fillStyle = COLORS.DOOR_FG;
-        ctx.fillText('+', px + 2, py + 1);
+      // FOV check
+      const vis = gameMap.isVisible(mx, my);
+      const explored = gameMap.isExplored(mx, my);
+
+      if (!explored) continue; // Leave black
+
+      const tile = gameMap.getTile(mx, my);
+      const meta = TILE_META[tile];
+      if (!meta) continue;
+
+      // Door tiles — canvas-drawn
+      if (tile === TILE.DOOR_CLOSED || tile === TILE.DOOR_OPEN) {
+        const door = gameMap.getDoorAt(mx, my);
+        if (door) {
+          drawDoor(px, py, door);
+          continue;
+        }
       }
-      // VOID: already cleared to black
+
+      // Check overlay first
+      const ov = gameMap.getOverlay(mx, my);
+      if (ov) {
+        // Draw base bg, then overlay char
+        ctx.fillStyle = ov.color;
+        ctx.fillText(ov.char, px + 2, py + 1);
+      } else {
+        // Draw tile char
+        let ch = meta.char;
+        let fg = meta.fg;
+
+        ctx.fillStyle = fg;
+        ctx.fillText(ch, px + 2, py + 1);
+      }
     }
   }
 
-  // Draw entities (remote players)
+  // Draw entities (remote players) — only if visible
   for (const ent of entities) {
+    if (!gameMap.isVisible(ent.x, ent.y)) continue;
+
     const sx = (ent.x - camera.x) * TILE_SIZE;
     const sy = (ent.y - camera.y) * TILE_SIZE;
-    if (sx < -TILE_SIZE || sx >= GAME_WIDTH || sy < -TILE_SIZE || sy >= viewRows * TILE_SIZE) continue;
+    if (sx < -TILE_SIZE || sx >= viewport.gameWidth || sy < -TILE_SIZE || sy >= viewRows * TILE_SIZE) continue;
 
-    ctx.fillStyle = ent.color;
-    ctx.fillText(ent.char, sx + 2, sy + 1);
+    ctx.font = FONT;
+    drawRotatedChar(ent.char, sx, sy, ent.color, ent.facing);
 
     // Name label above entity
     if (ent.name) {
-      ctx.font = `${FONT_SIZE - 6}px 'JetBrains Mono', monospace`;
+      ctx.font = NAME_FONT;
       ctx.fillStyle = ent.color;
-      const tw = ctx.measureText(ent.name).width;
+      if (ent._nameWidth === undefined) {
+        ent._nameWidth = ctx.measureText(ent.name).width;
+      }
+      const tw = ent._nameWidth;
       ctx.fillText(ent.name, sx + TILE_SIZE / 2 - tw / 2, sy - 12);
       ctx.font = FONT;
     }
   }
 
-  // Draw local player
+  // Draw local player (always visible)
   if (localEntity) {
     const sx = (localEntity.x - camera.x) * TILE_SIZE;
     const sy = (localEntity.y - camera.y) * TILE_SIZE;
-    ctx.fillStyle = localEntity.color;
-    ctx.fillText(localEntity.char, sx + 2, sy + 1);
+    drawRotatedChar(localEntity.char, sx, sy, localEntity.color, localEntity.facing);
   }
 
-  // Draw HUD
-  drawHUD(hudInfo, viewRows);
-}
+  // Apply smooth fog overlay
+  if (fog) {
+    fog.render(ctx, gameMap, camera, localEntity.x, localEntity.y);
+  }
 
-function drawHUD(info, viewRows) {
-  const hudY = viewRows * TILE_SIZE;
-  const hudH = HUD_ROWS * TILE_SIZE;
-
-  // HUD background
-  ctx.fillStyle = COLORS.HUD_BG;
-  ctx.fillRect(0, hudY, GAME_WIDTH, hudH);
-
-  // Top border line
-  ctx.fillStyle = COLORS.HUD_FG;
-  ctx.fillRect(0, hudY, GAME_WIDTH, 1);
-
-  ctx.font = `${FONT_SIZE - 4}px 'JetBrains Mono', monospace`;
-  ctx.fillStyle = COLORS.HUD_FG;
-  ctx.textBaseline = 'top';
-
-  const pad = 10;
-  const lineH = TILE_SIZE;
-
-  // Line 1: player name and coords
-  const name = info.name || 'unknown';
-  const coords = info.x !== undefined ? `(${info.x}, ${info.y})` : '';
-  ctx.fillText(`${name}  ${coords}`, pad, hudY + 6);
-
-  // Line 2: player count
-  const count = info.playerCount || 1;
-  ctx.fillText(`Players: ${count}`, pad, hudY + 6 + lineH);
-
-  // Right side: game title
-  const title = 'DEN';
-  const tw = ctx.measureText(title).width;
-  ctx.fillText(title, GAME_WIDTH - tw - pad, hudY + 6);
+  // "Enter (E)" floating prompt above player on ENTRY tiles
+  if (showEntryPrompt && localEntity) {
+    const sx = (localEntity.x - camera.x) * TILE_SIZE;
+    const sy = (localEntity.y - camera.y) * TILE_SIZE;
+    const label = 'Enter (E)';
+    ctx.font = NAME_FONT;
+    const tw = ctx.measureText(label).width;
+    const px = sx + TILE_SIZE / 2 - tw / 2;
+    const py = sy - 14;
+    // Dark background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(px - 4, py - 2, tw + 8, 14);
+    // Text
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText(label, px, py);
+    ctx.font = FONT;
+  }
 }

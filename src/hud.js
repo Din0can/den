@@ -4,11 +4,13 @@ export const hudInfo = {
   x: 0,
   y: 0,
   playerCount: 1,
+  layer: 0,
 };
 
-export function updateHUD(name, x, y, playerCount) {
+export function updateHUD(name, x, y, playerCount, layer) {
   hudInfo.name = name;
   hudInfo.x = x;
   hudInfo.y = y;
   hudInfo.playerCount = playerCount;
+  hudInfo.layer = layer;
 }

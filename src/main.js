@@ -1,56 +1,138 @@
-import { GAME_WIDTH, GAME_HEIGHT, MOVE_COOLDOWN, PLAYER_COLORS, COLORS } from './config.js';
-import { init as initCRT } from './crt-renderer.js';
+import { MOVE_COOLDOWN, COLORS, FOV_RADIUS, FOV_GRACE_RADIUS, TILE } from './config.js';
+import { CHUNK_VIEW_DIST, chunkKey, worldToChunk } from './chunk.js';
+import { init as initCRT, resize as resizeCRT, resizeTexture } from './crt-renderer.js';
 import { GameMap } from './game-map.js';
 import { Entity } from './entity.js';
 import { Camera } from './camera.js';
-import { initInput, getMovementDir } from './input.js';
+import { initInput, getMovementDir, consumeInteract } from './input.js';
 import { initRenderer, render } from './game-renderer.js';
+import { initHudRenderer, resizeHud, renderHud } from './hud-renderer.js';
 import { hudInfo, updateHUD } from './hud.js';
+import { calculateFOV } from './fov.js';
+import { viewport, recalcViewport } from './viewport.js';
+import { Fog } from './fog.js';
 import * as network from './network.js';
+
+// Facing direction -> interaction offset
+const FACING_OFFSET = {
+  north: { dx: 0, dy: -1 },
+  south: { dx: 0, dy: 1 },
+  east:  { dx: 1, dy: 0 },
+  west:  { dx: -1, dy: 0 },
+};
+
+function dirToFacing(dx, dy) {
+  if (dy < 0) return 'north';
+  if (dy > 0) return 'south';
+  if (dx > 0) return 'east';
+  if (dx < 0) return 'west';
+  return 'south';
+}
 
 // State
 const gameMap = new GameMap();
 const camera = new Camera();
+const fog = new Fog();
 let localEntity = null;
-const remotePlayers = new Map(); // id -> Entity
+const remotePlayers = new Map();
 let lastMoveTime = 0;
 let playerName = '';
-let colorIndex = 0;
 let connected = false;
+let fovDirty = true;
+let currentLayerId = null;
+let onEntryTile = false;
+let gameCanvas;
+let hudCanvas;
+
+// Chunk tracking
+let lastChunkX = -999;
+let lastChunkY = -999;
+function handleResize() {
+  recalcViewport(window.innerWidth, window.innerHeight);
+  gameCanvas.width = viewport.gameWidth;
+  gameCanvas.height = viewport.gameHeight;
+  initRenderer(gameCanvas);
+  resizeTexture();
+  resizeCRT(window.innerHeight - viewport.hudHeight);
+  resizeHud(window.innerWidth, viewport.hudHeight);
+  fovDirty = true;
+}
+
+let resizeTimer;
+function debouncedResize() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(handleResize, 100);
+}
+
+function loadLayer(meta, initialChunks) {
+  currentLayerId = meta.id;
+  gameMap.initBounds(meta.bounds);
+  gameMap.loadChunks(initialChunks);
+  lastChunkX = -999;
+  lastChunkY = -999;
+  fovDirty = true;
+}
+
+function checkChunkBoundary() {
+  if (!localEntity || currentLayerId === null) return;
+  const { cx, cy } = worldToChunk(localEntity.x, localEntity.y);
+  if (cx === lastChunkX && cy === lastChunkY) return;
+
+  lastChunkX = cx;
+  lastChunkY = cy;
+
+  // Find chunks we need but don't have
+  const missing = [];
+  for (let dy = -CHUNK_VIEW_DIST; dy <= CHUNK_VIEW_DIST; dy++) {
+    for (let dx = -CHUNK_VIEW_DIST; dx <= CHUNK_VIEW_DIST; dx++) {
+      const key = chunkKey(cx + dx, cy + dy);
+      if (!gameMap.chunks.has(key)) {
+        missing.push(key);
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    network.requestChunks(currentLayerId, missing);
+  }
+}
 
 function init() {
-  const gameCanvas = document.getElementById('game-canvas');
-  gameCanvas.width = GAME_WIDTH;
-  gameCanvas.height = GAME_HEIGHT;
+  gameCanvas = document.getElementById('game-canvas');
+  hudCanvas = document.getElementById('hud-canvas');
+  recalcViewport(window.innerWidth, window.innerHeight);
+  gameCanvas.width = viewport.gameWidth;
+  gameCanvas.height = viewport.gameHeight;
   initRenderer(gameCanvas);
+  initHudRenderer(hudCanvas);
+  resizeHud(window.innerWidth, viewport.hudHeight);
   initInput();
+  window.addEventListener('resize', debouncedResize);
 
-  // Ask for player name
   playerName = generateName();
-
-  // Connect to server
   network.connect();
 
   network.onWelcome((data) => {
     connected = true;
-    // Load map from server
-    gameMap.load(data.map, data.mapWidth, data.mapHeight);
+    loadLayer(data.layerMeta, data.initialChunks);
 
-    // Create local player entity
-    localEntity = new Entity(data.id, data.spawn.x, data.spawn.y, '@', COLORS.PLAYER_LOCAL, playerName);
+    localEntity = new Entity(data.id, data.spawn.x, data.spawn.y, '@', COLORS.PLAYER_LOCAL, playerName, 'south');
 
-    // Add existing players
     for (const p of data.players) {
-      const color = PLAYER_COLORS[colorIndex++ % PLAYER_COLORS.length];
-      remotePlayers.set(p.id, new Entity(p.id, p.x, p.y, '@', p.color || color, p.name || ''));
+      remotePlayers.set(p.id, new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south'));
     }
 
-    camera.follow(localEntity, gameMap.width, gameMap.height);
+    // Send name to server to trigger color computation
+    network.sendName(playerName);
+
+    const bounds = gameMap.getLoadedBounds();
+    camera.follow(localEntity, bounds);
+    checkChunkBoundary();
+    fovDirty = true;
   });
 
   network.onPlayerJoined((data) => {
-    const color = data.color || PLAYER_COLORS[colorIndex++ % PLAYER_COLORS.length];
-    remotePlayers.set(data.id, new Entity(data.id, data.spawn.x, data.spawn.y, '@', color, data.name || ''));
+    remotePlayers.set(data.id, new Entity(data.id, data.spawn.x, data.spawn.y, '@', data.color || '#888888', data.name || '', data.facing || 'south'));
   });
 
   network.onPlayerLeft((data) => {
@@ -60,14 +142,39 @@ function init() {
   network.onPlayerState((data) => {
     const ent = remotePlayers.get(data.id);
     if (ent) {
-      ent.x = data.x;
-      ent.y = data.y;
+      if (data.x !== undefined) ent.x = data.x;
+      if (data.y !== undefined) ent.y = data.y;
       if (data.color) ent.color = data.color;
       if (data.name) ent.name = data.name;
+      if (data.facing) ent.facing = data.facing;
     }
   });
 
-  // Start CRT renderer with game render callback
+  network.onDoorState((data) => {
+    gameMap.setDoorState(data.doorId, data.isOpen);
+    fovDirty = true;
+  });
+
+  network.onChunkData((data) => {
+    gameMap.loadChunks(data.chunks);
+    fovDirty = true;
+  });
+
+  network.onLayerData((data) => {
+    loadLayer(data.layerMeta, data.initialChunks);
+    remotePlayers.clear();
+    if (data.players) {
+      for (const p of data.players) {
+        remotePlayers.set(p.id, new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south'));
+      }
+    }
+    if (data.spawn && localEntity) {
+      localEntity.x = data.spawn.x;
+      localEntity.y = data.spawn.y;
+    }
+    fovDirty = true;
+  });
+
   initCRT(gameLoop);
 }
 
@@ -77,24 +184,64 @@ function gameLoop(now) {
   // Movement with cooldown
   const dir = getMovementDir();
   if (dir && now - lastMoveTime >= MOVE_COOLDOWN) {
+    const newFacing = dirToFacing(dir.dx, dir.dy);
+    const facingChanged = localEntity.facing !== newFacing;
+    localEntity.facing = newFacing;
+
     const nx = localEntity.x + dir.dx;
     const ny = localEntity.y + dir.dy;
     if (gameMap.isPassable(nx, ny)) {
       localEntity.x = nx;
       localEntity.y = ny;
       lastMoveTime = now;
-      network.sendState(localEntity.x, localEntity.y);
+      fovDirty = true;
+      network.sendState(localEntity.x, localEntity.y, localEntity.facing);
+      checkChunkBoundary();
+    } else if (facingChanged) {
+      network.sendFacing(localEntity.facing);
     }
   }
 
-  // Update camera
-  camera.follow(localEntity, gameMap.width, gameMap.height);
+  // Detect ENTRY tile under player
+  onEntryTile = gameMap.getTile(localEntity.x, localEntity.y) === TILE.ENTRY;
 
-  // Update HUD
-  updateHUD(playerName, localEntity.x, localEntity.y, remotePlayers.size + 1);
+  // Interact (E key) — ENTRY takes priority over doors
+  if (consumeInteract()) {
+    if (onEntryTile) {
+      network.sendEnterExit();
+    } else {
+      const offset = FACING_OFFSET[localEntity.facing];
+      const tx = localEntity.x + offset.dx;
+      const ty = localEntity.y + offset.dy;
+      const door = gameMap.getDoorAt(tx, ty);
+      if (door) {
+        network.sendDoorToggle(door.id);
+      } else {
+        const standDoor = gameMap.getDoorAt(localEntity.x, localEntity.y);
+        if (standDoor) {
+          network.sendDoorToggle(standDoor.id);
+        }
+      }
+    }
+  }
+
+  // FOV
+  if (fovDirty) {
+    calculateFOV(gameMap, localEntity.x, localEntity.y, FOV_RADIUS, FOV_GRACE_RADIUS);
+    fog.updateFade(gameMap);
+    fovDirty = false;
+  }
+
+  // Camera
+  const bounds = gameMap.getLoadedBounds();
+  camera.follow(localEntity, bounds);
+
+  // HUD
+  updateHUD(playerName, localEntity.x, localEntity.y, remotePlayers.size + 1, currentLayerId);
 
   // Render
-  render(gameMap, camera, localEntity, [...remotePlayers.values()], hudInfo);
+  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile);
+  renderHud(hudInfo);
 }
 
 function generateName() {
@@ -105,5 +252,4 @@ function generateName() {
   return `${adj}${noun}`;
 }
 
-// Wait for fonts to load, then init
 document.fonts.ready.then(init);

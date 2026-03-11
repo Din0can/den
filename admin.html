@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Den — Admini</title>
+  <style>
+    @font-face {
+      font-family: 'Kraken-Primary';
+      src: url('/fonts/kraken-primary.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'JetBrains Mono';
+      src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+      unicode-range: U+0000-00FF;
+    }
+    @font-face {
+      font-family: 'JetBrains Mono';
+      src: url('/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+      unicode-range: U+0100-024F;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      overflow: hidden;
+      font-family: 'JetBrains Mono', monospace;
+      display: flex;
+    }
+    #sidebar {
+      width: 220px;
+      flex-shrink: 0;
+      background: #111;
+      border-right: 1px solid #333;
+      padding: 12px;
+      overflow-y: auto;
+      color: #ccc;
+    }
+    #sidebar h2 {
+      font-size: 14px;
+      color: #888;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+    #layer-list {
+      list-style: none;
+      padding: 0;
+    }
+    #layer-list li {
+      padding: 8px 10px;
+      cursor: pointer;
+      border-radius: 3px;
+      font-size: 13px;
+      margin-bottom: 2px;
+      color: #aaa;
+    }
+    #layer-list li:hover {
+      background: #222;
+      color: #fff;
+    }
+    #layer-list li.active {
+      background: #2a2a3a;
+      color: #fff;
+      border-left: 3px solid #6a6aff;
+      padding-left: 7px;
+    }
+    .player-list {
+      list-style: none;
+      padding: 0 0 0 12px;
+      margin: 0;
+    }
+    .player-list li {
+      padding: 3px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      border-radius: 2px;
+      margin-bottom: 1px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .player-list li:hover {
+      background: #1a1a2a;
+    }
+    .player-list li.active {
+      background: #2a2a3a;
+      border-left: 2px solid currentColor;
+      padding-left: 6px;
+    }
+    .player-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .layer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .player-count {
+      font-size: 10px;
+      color: #666;
+    }
+    .awaiting-msg {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #444;
+      font-size: 14px;
+    }
+    #layer-info {
+      margin-top: 16px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.6;
+    }
+    #layer-info .label {
+      color: #888;
+    }
+    #admin-canvas {
+      flex: 1;
+      image-rendering: pixelated;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>Layers</h2>
+    <ul id="layer-list"></ul>
+    <div id="layer-info"></div>
+  </div>
+  <canvas id="admin-canvas"></canvas>
+  <script type="module" src="/src/admini.js"></script>
+</body>
+</html>

@@ -1,4 +1,5 @@
-import { GAME_WIDTH, GAME_HEIGHT, CRT_PARAMS } from './config.js';
+import { CRT_PARAMS } from './config.js';
+import { viewport } from './viewport.js';
 
 let gl, canvas, gameCanvas;
 let program, texture, quadBuffer;
@@ -6,6 +7,9 @@ const uLocs = {};
 let params = { ...CRT_PARAMS };
 let lastTime = 0;
 let renderCallback = null;
+const TARGET_FPS = 30;
+const FRAME_INTERVAL = 1000 / TARGET_FPS;
+let lastFrameTime = 0;
 
 function compileShader(src, type) {
   const shader = gl.createShader(type);
@@ -38,32 +42,30 @@ function createProgram(vertSrc, fragSrc) {
   return prog;
 }
 
-function resize() {
+export function resize(crtHeight) {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth;
-  const h = window.innerHeight;
+  const h = crtHeight !== undefined ? crtHeight : window.innerHeight;
 
-  const targetRatio = GAME_WIDTH / GAME_HEIGHT;
-  const windowRatio = w / h;
-  let canvasW, canvasH;
-
-  if (windowRatio > targetRatio) {
-    canvasH = h;
-    canvasW = Math.round(h * targetRatio);
-  } else {
-    canvasW = w;
-    canvasH = Math.round(w / targetRatio);
-  }
-
-  canvas.width = canvasW * dpr;
-  canvas.height = canvasH * dpr;
-  canvas.style.width = canvasW + 'px';
-  canvas.style.height = canvasH + 'px';
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
   gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+export function resizeTexture() {
+  if (!gl || !texture || !gameCanvas) return;
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gameCanvas);
 }
 
 function frame(now) {
   requestAnimationFrame(frame);
+
+  // Throttle to target FPS
+  if (now - lastFrameTime < FRAME_INTERVAL) return;
+  lastFrameTime = now;
 
   // Call game render callback
   if (renderCallback) {
@@ -80,7 +82,7 @@ function frame(now) {
   gl.uniform1f(uLocs.uOverlayMode, 0.0);
   gl.uniform1f(uLocs.uCurvature, params.curvature || 0);
   gl.uniform1f(uLocs.uChromatic, params.chromatic || 0);
-  gl.uniform1f(uLocs.uScanlineCount, params.scanlineCount || 300);
+  gl.uniform1f(uLocs.uScanlineCount, (params.scanlineCount || 300) * (canvas.height / 800));
   gl.uniform1f(uLocs.uScanlineIntensity, params.scanlineIntensity || 0);
   gl.uniform1f(uLocs.uBloomRadius, params.bloomRadius || 3);
   gl.uniform1f(uLocs.uBloomIntensity, params.bloomIntensity || 0);
@@ -174,8 +176,7 @@ export async function init(onRender) {
   gl.disable(gl.BLEND);
   gl.clearColor(0, 0, 0, 1);
 
-  window.addEventListener('resize', resize);
-  resize();
+  resize(window.innerHeight - viewport.hudHeight);
 
   // Start render loop
   lastTime = performance.now();

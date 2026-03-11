@@ -3,8 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>den</title>
+  <title>KrakenOnline</title>
   <style>
+    @font-face {
+      font-family: 'Kraken-Primary';
+      src: url('/fonts/kraken-primary.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+      font-display: swap;
+    }
     @font-face {
       font-family: 'JetBrains Mono';
       src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
@@ -27,22 +34,27 @@
       background: #000;
       overflow: hidden;
       font-family: 'JetBrains Mono', monospace;
+      display: flex;
+      flex-direction: column;
     }
     #game-canvas {
       display: none;
-      position: absolute;
     }
     #crt-canvas {
-      position: absolute;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
+      flex: 1;
+      width: 100%;
       image-rendering: pixelated;
+    }
+    #hud-canvas {
+      width: 100%;
+      flex-shrink: 0;
     }
   </style>
 </head>
 <body>
-  <canvas id="game-canvas" width="1280" height="800"></canvas>
+  <canvas id="game-canvas"></canvas>
   <canvas id="crt-canvas"></canvas>
+  <canvas id="hud-canvas"></canvas>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

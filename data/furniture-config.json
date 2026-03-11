@@ -1,0 +1,111 @@
+{
+  "props": {
+    "TABLE_2X2": {
+      "cells": [["┌", "┐"], ["└", "┘"]],
+      "passable": false,
+      "color": "#8B7355"
+    },
+    "TABLE_3X2": {
+      "cells": [["┌", "─", "┐"], ["└", "─", "┘"]],
+      "passable": false,
+      "color": "#8B7355"
+    },
+    "CHAIR": {
+      "cells": [["╥"]],
+      "passable": false,
+      "color": "#6B4423"
+    },
+    "CHEST": {
+      "cells": [["▣"]],
+      "passable": false,
+      "color": "#DAA520"
+    },
+    "BARREL": {
+      "cells": [["◎"]],
+      "passable": false,
+      "color": "#8B4513"
+    },
+    "CRATE": {
+      "cells": [["▤"]],
+      "passable": false,
+      "color": "#A0522D"
+    },
+    "BOOKSHELF_2": {
+      "cells": [["▐", "▌"]],
+      "passable": false,
+      "color": "#654321"
+    },
+    "BED": {
+      "cells": [["╔", "╗"], ["║", "║"], ["╚", "╝"]],
+      "passable": false,
+      "color": "#8B0000"
+    },
+    "PILLAR": {
+      "cells": [["○"]],
+      "passable": false,
+      "color": "#808080"
+    },
+    "TORCH_STAND": {
+      "cells": [["¥"]],
+      "passable": false,
+      "color": "#FF6600"
+    },
+    "CAGE": {
+      "cells": [["┏", "┓"], ["┗", "┛"]],
+      "passable": false,
+      "color": "#4A4A4A"
+    },
+    "WEAPON_RACK": {
+      "cells": [["╫", "╫"]],
+      "passable": false,
+      "color": "#708090"
+    }
+  },
+  "roomTemplates": {
+    "bedroom": {
+      "weight": 1,
+      "placements": [
+        { "prop": "BED", "position": "wall-left", "count": 1 },
+        { "prop": "CHEST", "position": "wall-right", "count": 1 }
+      ]
+    },
+    "dining": {
+      "weight": 1,
+      "placements": [
+        { "prop": "TABLE_3X2", "position": "center", "count": 1 },
+        { "prop": "CHAIR", "position": "random", "count": 4 }
+      ]
+    },
+    "library": {
+      "weight": 1,
+      "placements": [
+        { "prop": "BOOKSHELF_2", "position": "wall-top", "count": 2 },
+        { "prop": "BOOKSHELF_2", "position": "wall-bottom", "count": 1 },
+        { "prop": "CHAIR", "position": "random", "count": 1 }
+      ]
+    },
+    "storage": {
+      "weight": 1,
+      "placements": [
+        { "prop": ["BARREL", "CRATE"], "position": "random", "count": 3 }
+      ]
+    },
+    "dungeon": {
+      "weight": 1,
+      "placements": [
+        { "prop": "CAGE", "position": "center", "count": 1 },
+        { "prop": "WEAPON_RACK", "position": "wall-top", "count": 1 }
+      ]
+    },
+    "empty": {
+      "weight": 2,
+      "placements": [
+        { "prop": "PILLAR", "position": "random", "count": 1, "chance": 0.5 }
+      ]
+    }
+  },
+  "torches": {
+    "min": 1,
+    "max": 2
+  }
+}
