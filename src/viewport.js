@@ -6,7 +6,7 @@ const MIN_ROWS = 21;
 export const viewport = {
   cols: MIN_COLS,
   rows: MIN_ROWS,
-  hudHeight: 32,
+  hudHeight: 48,
   gameWidth: MIN_COLS * TILE_SIZE,
   gameHeight: MIN_ROWS * TILE_SIZE,
 };

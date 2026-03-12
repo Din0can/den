@@ -12,8 +12,10 @@ export class GameMap {
     this.overlay = new Map();       // packed coord -> {char, color, passable}
     this.doors = new Map();         // packed coord -> door object
     this._allDoors = [];            // flat list for setDoorState lookup
+    this.torchOverlay = new Map();  // packed coord -> overlay entry (char === '¥')
     this.infoPoints = new Map();    // packed coord -> info object
     this._allInfos = [];            // flat list
+    this.blood = new Map();         // packed coord -> bitmask (quadrants)
   }
 
   /** Initialize map dimensions and allocate visibility arrays */
@@ -30,10 +32,12 @@ export class GameMap {
     this._initArrays(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
     this.chunks.clear();
     this.overlay = new Map();
+    this.torchOverlay = new Map();
     this.doors = new Map();
     this._allDoors = [];
     this.infoPoints = new Map();
     this._allInfos = [];
+    this.blood = new Map();
   }
 
   /** Load from flat array (backward-compat: converts to chunks internally) */
@@ -41,10 +45,12 @@ export class GameMap {
     this._initArrays(width, height);
     this.chunks.clear();
     this.overlay = new Map();
+    this.torchOverlay = new Map();
     this.doors = new Map();
     this._allDoors = [];
     this.infoPoints = new Map();
     this._allInfos = [];
+    this.blood = new Map();
 
     // Convert flat array to chunks
     const chunksX = Math.ceil(width / CHUNK_SIZE);
@@ -72,7 +78,10 @@ export class GameMap {
       this.chunks.set(chunkKey(chunk.cx, chunk.cy), new Uint8Array(chunk.tiles));
       if (chunk.overlay) {
         for (const [x, y, char, color, passable] of chunk.overlay) {
-          this.overlay.set(this._overlayKey(x, y), { char, color, passable });
+          const key = this._overlayKey(x, y);
+          const entry = { char, color, passable };
+          this.overlay.set(key, entry);
+          if (char === '¥') this.torchOverlay.set(key, entry);
         }
       }
       if (chunk.doors) {
@@ -197,14 +206,21 @@ export class GameMap {
   }
 
   setOverlay(x, y, data) {
-    this.overlay.set(this._overlayKey(x, y), data);
+    const key = this._overlayKey(x, y);
+    this.overlay.set(key, data);
+    if (data.char === '¥') this.torchOverlay.set(key, data);
+    else this.torchOverlay.delete(key);
   }
 
   loadOverlay(overlayArray) {
     this.overlay = new Map();
+    this.torchOverlay = new Map();
     if (!overlayArray) return;
     for (const [x, y, char, color, passable] of overlayArray) {
-      this.overlay.set(this._overlayKey(x, y), { char, color, passable });
+      const key = this._overlayKey(x, y);
+      const entry = { char, color, passable };
+      this.overlay.set(key, entry);
+      if (char === '¥') this.torchOverlay.set(key, entry);
     }
   }
 
@@ -332,6 +348,25 @@ export class GameMap {
     if (!info) return;
     this.infoPoints.delete(this._infoKey(info.x, info.y));
     this._allInfos = this._allInfos.filter(i => i.id !== infoId);
+  }
+
+  // --- Blood ---
+  getBlood(x, y) {
+    return this.blood.get(this._overlayKey(x, y)) || 0;
+  }
+
+  setBlood(x, y, quadrants) {
+    const key = this._overlayKey(x, y);
+    const existing = this.blood.get(key) || 0;
+    this.blood.set(key, existing | quadrants);
+  }
+
+  loadBlood(bloodArray) {
+    this.blood = new Map();
+    if (!bloodArray) return;
+    for (const [x, y, bitmask] of bloodArray) {
+      this.blood.set(this._overlayKey(x, y), bitmask);
+    }
   }
 
   /** Get bounds of the map in world coordinates */

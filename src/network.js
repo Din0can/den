@@ -16,6 +16,8 @@ export function connect() {
   socket.on('doorState', (data) => handlers.onDoorState?.(data));
   socket.on('layerData', (data) => handlers.onLayerData?.(data));
   socket.on('chunkData', (data) => handlers.onChunkData?.(data));
+  socket.on('damage', (data) => handlers.onDamage?.(data));
+  socket.on('bloodUpdate', (data) => handlers.onBloodUpdate?.(data));
 
   socket.on('connect', () => console.log('Connected:', socket.id));
   socket.on('disconnect', () => console.log('Disconnected'));
@@ -28,6 +30,8 @@ export function onPlayerState(fn) { handlers.onPlayerState = fn; }
 export function onDoorState(fn) { handlers.onDoorState = fn; }
 export function onLayerData(fn) { handlers.onLayerData = fn; }
 export function onChunkData(fn) { handlers.onChunkData = fn; }
+export function onDamage(fn) { handlers.onDamage = fn; }
+export function onBloodUpdate(fn) { handlers.onBloodUpdate = fn; }
 
 export function sendState(x, y, facing) {
   if (!socket) return;
@@ -65,6 +69,11 @@ export function sendChangeLayer(layerId) {
 export function sendEnterExit() {
   if (!socket) return;
   socket.emit('enterExit');
+}
+
+export function sendHurt(limbId, amount, type) {
+  if (!socket) return;
+  socket.emit('hurt', { limbId, amount, type });
 }
 
 export function getId() {

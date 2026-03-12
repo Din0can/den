@@ -1,10 +1,36 @@
-import { TILE_SIZE, TILE, TILE_META, COLORS } from './config.js';
+import { TILE_SIZE, TILE, TILE_META, COLORS, TORCH_VISION_RADIUS } from './config.js';
 import { viewport } from './viewport.js';
 
 let ctx;
 const FONT_SIZE = TILE_SIZE;
 const FONT = `${FONT_SIZE}px 'JetBrains Mono', monospace`;
 const NAME_FONT = `${FONT_SIZE - 6}px 'JetBrains Mono', monospace`;
+
+// Pre-rendered torch glow stamp (same pattern as fog.js offscreen canvas)
+let _torchGlowCanvas = null;
+let _torchGlowSize = 0;
+
+function getTorchGlowCanvas() {
+  const size = TORCH_VISION_RADIUS * TILE_SIZE * 2;
+  if (_torchGlowCanvas && _torchGlowSize === size) return _torchGlowCanvas;
+  _torchGlowSize = size;
+  _torchGlowCanvas = typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(size, size)
+    : (() => { const c = document.createElement('canvas'); c.width = size; c.height = size; return c; })();
+  const g = _torchGlowCanvas.getContext('2d');
+  const r = size / 2;
+  const grad = g.createRadialGradient(r, r, 0, r, r, r);
+  grad.addColorStop(0, 'rgba(255, 102, 0, 0.12)');
+  grad.addColorStop(0.4, 'rgba(255, 80, 0, 0.06)');
+  grad.addColorStop(1.0, 'rgba(255, 60, 0, 0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return _torchGlowCanvas;
+}
+
+// Zero-alloc torch collection buffers
+const _torchXs = new Int32Array(16);
+const _torchYs = new Int32Array(16);
 
 export function initRenderer(canvas) {
   ctx = canvas.getContext('2d');
@@ -64,6 +90,7 @@ function drawDoor(px, py, door) {
 }
 
 export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos) {
+  const entityArray = Array.from(entities);
   const viewRows = viewport.rows;
 
   // Clear to black
@@ -101,6 +128,17 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
         }
       }
 
+      // Blood layer (under overlay/entities)
+      const blood = gameMap.getBlood(mx, my);
+      if (blood) {
+        ctx.fillStyle = '#440808';
+        const half = TILE_SIZE / 2;
+        if (blood & 1) ctx.fillRect(px, py, half, half);
+        if (blood & 2) ctx.fillRect(px + half, py, half, half);
+        if (blood & 4) ctx.fillRect(px, py + half, half, half);
+        if (blood & 8) ctx.fillRect(px + half, py + half, half, half);
+      }
+
       // Check overlay first
       const ov = gameMap.getOverlay(mx, my);
       if (ov) {
@@ -119,7 +157,7 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
   }
 
   // Draw entities (remote players) — only if visible
-  for (const ent of entities) {
+  for (const ent of entityArray) {
     if (!gameMap.isVisible(ent.x, ent.y)) continue;
 
     const sx = (ent.x - camera.x) * TILE_SIZE;
@@ -152,6 +190,60 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
   // Apply smooth fog overlay
   if (fog) {
     fog.render(ctx, gameMap, camera, localEntity.x, localEntity.y);
+  }
+
+  // --- Torch vision: glow, chars, and entity reveal on top of fog ---
+  let torchCount = 0;
+  for (const [key] of gameMap.torchOverlay) {
+    const tx = key >> 16;
+    const ty = key & 0xFFFF;
+    const margin = TORCH_VISION_RADIUS + 2;
+    if (tx >= camera.x - margin && tx < camera.x + viewport.cols + margin &&
+        ty >= camera.y - margin && ty < camera.y + viewport.rows + margin) {
+      _torchXs[torchCount] = tx;
+      _torchYs[torchCount] = ty;
+      torchCount++;
+      if (torchCount >= _torchXs.length) break;
+    }
+  }
+
+  if (torchCount > 0) {
+    // Torch glow (pre-rendered stamp blitted with 'screen' compositing)
+    ctx.globalCompositeOperation = 'screen';
+    const glowCanvas = getTorchGlowCanvas();
+    const glowR = TORCH_VISION_RADIUS * TILE_SIZE;
+    for (let i = 0; i < torchCount; i++) {
+      const sx = (_torchXs[i] - camera.x + 0.5) * TILE_SIZE - glowR;
+      const sy = (_torchYs[i] - camera.y + 0.5) * TILE_SIZE - glowR;
+      ctx.drawImage(glowCanvas, sx, sy);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Always draw torch character on top of fog
+    ctx.font = FONT;
+    for (let i = 0; i < torchCount; i++) {
+      const sx = (_torchXs[i] - camera.x) * TILE_SIZE;
+      const sy = (_torchYs[i] - camera.y) * TILE_SIZE;
+      if (sx < -TILE_SIZE || sx >= viewport.gameWidth || sy < -TILE_SIZE || sy >= viewRows * TILE_SIZE) continue;
+      ctx.fillStyle = '#FF6600';
+      ctx.fillText('¥', sx + 2, sy + 1);
+    }
+
+    // Draw entities near torches (even if not in player FOV)
+    for (const ent of entityArray) {
+      if (gameMap.isVisible(ent.x, ent.y)) continue;
+      let nearTorch = false;
+      for (let j = 0; j < torchCount; j++) {
+        const dx = ent.x - _torchXs[j], dy = ent.y - _torchYs[j];
+        if (dx * dx + dy * dy <= TORCH_VISION_RADIUS * TORCH_VISION_RADIUS) { nearTorch = true; break; }
+      }
+      if (!nearTorch) continue;
+      const sx = (ent.x - camera.x) * TILE_SIZE;
+      const sy = (ent.y - camera.y) * TILE_SIZE;
+      if (sx < -TILE_SIZE || sx >= viewport.gameWidth || sy < -TILE_SIZE || sy >= viewRows * TILE_SIZE) continue;
+      ctx.font = FONT;
+      drawRotatedChar(ent.char, sx, sy, ent.color, ent.facing);
+    }
   }
 
   // "Enter (E)" floating prompt above player on ENTRY tiles

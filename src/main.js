@@ -4,7 +4,7 @@ import { init as initCRT, resize as resizeCRT, resizeTexture } from './crt-rende
 import { GameMap } from './game-map.js';
 import { Entity } from './entity.js';
 import { Camera } from './camera.js';
-import { initInput, getMovementDir, consumeInteract } from './input.js';
+import { initInput, getMovementDir, consumeInteract, consumeHurt } from './input.js';
 import { initRenderer, render } from './game-renderer.js';
 import { initHudRenderer, resizeHud, renderHud } from './hud-renderer.js';
 import { hudInfo, updateHUD } from './hud.js';
@@ -41,6 +41,7 @@ let connected = false;
 let fovDirty = true;
 let currentLayerId = null;
 let onEntryTile = false;
+let localStats = null;
 let gameCanvas;
 let hudCanvas;
 
@@ -115,6 +116,8 @@ function init() {
   network.onWelcome((data) => {
     connected = true;
     loadLayer(data.layerMeta, data.initialChunks);
+    if (data.stats) localStats = data.stats;
+    if (data.blood) gameMap.loadBlood(data.blood);
 
     localEntity = new Entity(data.id, data.spawn.x, data.spawn.y, '@', COLORS.PLAYER_LOCAL, playerName, 'south');
 
@@ -162,6 +165,8 @@ function init() {
 
   network.onLayerData((data) => {
     loadLayer(data.layerMeta, data.initialChunks);
+    if (data.stats) localStats = data.stats;
+    if (data.blood) gameMap.loadBlood(data.blood);
     remotePlayers.clear();
     if (data.players) {
       for (const p of data.players) {
@@ -173,6 +178,18 @@ function init() {
       localEntity.y = data.spawn.y;
     }
     fovDirty = true;
+  });
+
+  network.onDamage((data) => {
+    if (data.stats) localStats = data.stats;
+  });
+
+  network.onBloodUpdate((data) => {
+    if (data.updates) {
+      for (const u of data.updates) {
+        gameMap.setBlood(u.x, u.y, u.quadrants);
+      }
+    }
   });
 
   initCRT(gameLoop);
@@ -204,6 +221,15 @@ function gameLoop(now) {
 
   // Detect ENTRY tile under player
   onEntryTile = gameMap.getTile(localEntity.x, localEntity.y) === TILE.ENTRY;
+
+  // Debug hurt (H key) — damage a random non-severed limb
+  if (consumeHurt() && localStats) {
+    const alive = localStats.limbs.filter(l => l.hp > 0);
+    if (alive.length > 0) {
+      const limb = alive[Math.floor(Math.random() * alive.length)];
+      network.sendHurt(limb.id, 5, 'flat');
+    }
+  }
 
   // Interact (E key) — ENTRY takes priority over doors
   if (consumeInteract()) {
@@ -237,7 +263,7 @@ function gameLoop(now) {
   camera.follow(localEntity, bounds);
 
   // HUD
-  updateHUD(playerName, localEntity.x, localEntity.y, remotePlayers.size + 1, currentLayerId);
+  updateHUD(playerName, localEntity.x, localEntity.y, remotePlayers.size + 1, currentLayerId, localStats);
 
   // Gather nearby info hologram text
   const nearbyInfos = gameMap.getInfoNear(localEntity.x, localEntity.y, 1);

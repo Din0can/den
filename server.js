@@ -9,6 +9,8 @@ import { generateWing } from './src/map-generator.js';
 import { generateSkeleton } from './src/skeleton-generator.js';
 import { CHUNK_SIZE, CHUNK_VIEW_DIST, chunkKey, worldToChunk, chunkIndex } from './src/chunk.js';
 import { nameToColor } from './src/name-color.js';
+import { createPlayerStats, applyFlatDamage, tickBleed } from './src/stats.js';
+import { splatter as bloodSplatter, dropBlood, packCoord } from './src/blood.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -115,8 +117,8 @@ function ensureDynamicLayer(depth) {
     layer = layerManager.createDynamicLayer(depth, {
       seed: deriveLayerSeed(depth),
       skeletonDensity: 0.3,
-      maxWidth: 160,
-      maxHeight: 120,
+      maxWidth: 200,
+      maxHeight: 160,
     });
   }
   return layer;
@@ -124,6 +126,28 @@ function ensureDynamicLayer(depth) {
 
 // Player state
 const players = new Map();
+
+// Blood storage per layer: layerId -> Map<packedCoord, bitmask>
+const layerBlood = new Map();
+
+function getLayerBlood(layerId) {
+  let blood = layerBlood.get(layerId);
+  if (!blood) {
+    blood = new Map();
+    layerBlood.set(layerId, blood);
+  }
+  return blood;
+}
+
+function serializeBlood(bloodMap) {
+  const result = [];
+  for (const [key, bitmask] of bloodMap) {
+    const x = key >> 16;
+    const y = (key << 16) >> 16; // sign-extend
+    result.push([x, y, bitmask]);
+  }
+  return result;
+}
 
 // Serve static files in production
 app.use(express.static(join(__dirname, 'dist')));
@@ -230,8 +254,9 @@ io.on('connection', (socket) => {
     generatePlayerWing(layer, id);
   }
 
-  const spawn = layer.getSpawn();
-  players.set(id, { id, color, x: spawn.x, y: spawn.y, name: '', facing: 'south' });
+  let spawn = layer.getSpawn();
+  spawn = offsetSpawn(layer, id, spawn);
+  players.set(id, { id, color, x: spawn.x, y: spawn.y, name: '', facing: 'south', stats: createPlayerStats() });
 
   // Build same-layer player list
   const others = [];
@@ -243,6 +268,7 @@ io.on('connection', (socket) => {
 
   // Send welcome with layer metadata + initial chunks
   const initialChunks = getInitialChunks(layer, id, spawn);
+  const p = players.get(id);
   socket.emit('welcome', {
     id,
     color,
@@ -250,6 +276,8 @@ io.on('connection', (socket) => {
     layerMeta: layer.getMeta(),
     initialChunks,
     players: others,
+    stats: p.stats,
+    blood: serializeBlood(getLayerBlood(layerId)),
   });
 
   socket.to(roomName).emit('playerJoined', { id, color, spawn, name: '', facing: 'south' });
@@ -436,6 +464,34 @@ io.on('connection', (socket) => {
       isOpen: door.isOpen,
       tiles: tileChanges,
     });
+    adminiNs.to(`admin:layer:${playerLayerId}`).emit('doorState', {
+      layerId: playerLayerId,
+      doorId: door.id,
+      isOpen: door.isOpen,
+      tiles: tileChanges,
+    });
+  });
+
+  // --- Debug hurt command ---
+  socket.on('hurt', (data) => {
+    const p = players.get(id);
+    if (!p || !p.stats) return;
+    const { limbId, amount, type } = data;
+    if (!limbId || !amount) return;
+
+    const playerLayerId = layerManager.getPlayerLayerId(id);
+    const blood = getLayerBlood(playerLayerId);
+    const result = applyFlatDamage(p.stats, limbId, amount);
+
+    // Splatter blood at player position
+    const severity = amount >= 10 ? 2 : 1;
+    const splatResult = bloodSplatter(blood, p.x, p.y, severity);
+
+    // Send damage to the hurt player
+    socket.emit('damage', { limbId, amount: result.damage, stats: p.stats });
+
+    // Send blood update to entire layer
+    io.to(`layer:${playerLayerId}`).emit('bloodUpdate', { updates: [splatResult] });
   });
 
   // --- Shared transition logic ---
@@ -507,6 +563,8 @@ io.on('connection', (socket) => {
       layerMeta: newLayer.getMeta(),
       initialChunks,
       players: others,
+      stats: p?.stats,
+      blood: serializeBlood(getLayerBlood(targetLayerId)),
     });
 
     socket.to(newRoom).emit('playerJoined', { id, color, spawn, name: p?.name || '', facing: 'south' });
@@ -943,8 +1001,9 @@ adminiNs.on('connection', (socket) => {
  * on a passable, non-entry tile. Shuffled random order so it's never predictable.
  */
 function offsetSpawn(layer, playerId, spawn) {
-  // Passable tile IDs: FLOOR=2, GRASS=5, PATH=8, STONE=9
-  const passable = new Set([2, 5, 8, 9]);
+  // Valid spawn tiles: walkable AND not a transition tile
+  // FLOOR=2, GRASS=5, PATH=8, STONE=9
+  const validSpawn = new Set([2, 5, 8, 9]);
 
   function getTileAt(x, y) {
     if (layer.type === 'dynamic') {
@@ -953,12 +1012,23 @@ function offsetSpawn(layer, playerId, spawn) {
     return layer.getTile(x, y);
   }
 
-  // Collect candidate offsets at distance 1 and 2 (manhattan), shuffled
+  // Check that a position has at least one adjacent passable neighbor
+  // so the player won't be stuck
+  function hasExit(x, y) {
+    const dirs = [[0,-1],[0,1],[-1,0],[1,0]];
+    for (const [ddx, ddy] of dirs) {
+      const t = getTileAt(x + ddx, y + ddy);
+      if (validSpawn.has(t) || t === 7) return true; // can walk to floor or entry
+    }
+    return false;
+  }
+
+  // Collect candidate offsets at distance 1-3 (manhattan), shuffled
   const offsets = [];
-  for (let dy = -2; dy <= 2; dy++) {
-    for (let dx = -2; dx <= 2; dx++) {
+  for (let dy = -3; dy <= 3; dy++) {
+    for (let dx = -3; dx <= 3; dx++) {
       const dist = Math.abs(dx) + Math.abs(dy);
-      if (dist >= 1 && dist <= 2) {
+      if (dist >= 1 && dist <= 3) {
         offsets.push({ dx, dy, dist });
       }
     }
@@ -968,18 +1038,19 @@ function offsetSpawn(layer, playerId, spawn) {
     const j = Math.floor(Math.random() * (i + 1));
     [offsets[i], offsets[j]] = [offsets[j], offsets[i]];
   }
-  // Prefer distance 1 first, then distance 2
+  // Prefer closer distances first
   offsets.sort((a, b) => a.dist - b.dist);
 
   for (const { dx, dy } of offsets) {
     const nx = spawn.x + dx;
     const ny = spawn.y + dy;
     const t = getTileAt(nx, ny);
-    if (passable.has(t)) {
+    if (validSpawn.has(t) && hasExit(nx, ny)) {
       return { x: nx, y: ny };
     }
   }
-  // Fallback: return original spawn if nothing valid found
+  // Last resort: if original spawn is at least passable (even entry), use it
+  // This should rarely happen — rooms always have floor tiles nearby
   return spawn;
 }
 
@@ -1036,7 +1107,11 @@ function placeWingExit(layer, playerId) {
 
   // Write ENTRY into wing chunk
   const wingChunk = pd.chunks.get(key);
-  if (wingChunk) wingChunk.tiles[idx] = 7; // TILE_ENTRY
+  if (wingChunk) {
+    wingChunk.tiles[idx] = 7; // TILE_ENTRY
+    // Clear overlay (furniture) at exit position so E is visible and passable
+    wingChunk.overlay = wingChunk.overlay.filter(([ox, oy]) => !(ox === ex && oy === ey));
+  }
 
   // PROMOTE to bones so all players see it (ENTRY is BONE_SACRED)
   let boneChunk = layer.bones.get(key);
@@ -1061,6 +1136,27 @@ function removeWingExit(layer, playerId) {
   layer.wingExits.delete(playerId);
   console.log(`Wing exit removed for ${playerId} at (${pos.x}, ${pos.y}) on layer ${layer.id}`);
 }
+
+// Bleed tick: every 2s, process all bleeding players
+setInterval(() => {
+  for (const [id, p] of players) {
+    if (!p.stats || p.stats.bleedStacks <= 0) continue;
+    const { totalDamage, killed } = tickBleed(p.stats);
+    if (totalDamage <= 0) continue;
+
+    const playerLayerId = layerManager.getPlayerLayerId(id);
+    const blood = getLayerBlood(playerLayerId);
+    const drops = Math.min(4, Math.ceil(p.stats.bleedStacks / 3));
+    const updates = [];
+    for (let i = 0; i < drops; i++) {
+      updates.push(dropBlood(blood, p.x, p.y));
+    }
+
+    const sock = io.sockets.sockets.get(id);
+    if (sock) sock.emit('damage', { stats: p.stats });
+    io.to(`layer:${playerLayerId}`).emit('bloodUpdate', { updates });
+  }
+}, 5000);
 
 http.listen(PORT, () => {
   console.log(`Den server running on http://localhost:${PORT}`);

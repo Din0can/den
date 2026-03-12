@@ -123,6 +123,10 @@ const DEFAULT_OBJECTS = {
     cells: [['╤']],
     passable: false, color: '#2F4F4F',
   },
+  SHELF: {
+    cells: [['╢', '╢']],
+    passable: false, color: '#6B4423',
+  },
 };
 
 const DEFAULT_ROOM_TEMPLATES = {
@@ -143,7 +147,7 @@ const DEFAULT_ROOM_TEMPLATES = {
   storage: {
     weight: 1,
     placements: [
-      { prop: ['BARREL', 'CRATE'], position: 'random', count: 3 },
+      { prop: ['BARREL', 'CRATE'], position: 'random', count: 5 },
     ],
   },
   dungeon: {
@@ -154,13 +158,14 @@ const DEFAULT_ROOM_TEMPLATES = {
     ],
   },
   empty: {
-    weight: 2,
+    weight: 3,
     placements: [
       { prop: 'PILLAR', position: 'random', count: 1, chance: 0.5 },
     ],
   },
   forge: {
     weight: 1,
+    minSize: { w: 8, h: 6 },
     placements: [
       { prop: 'ANVIL', position: 'center', count: 1 },
       { prop: 'WEAPON_RACK', position: 'wall-top', count: 1 },
@@ -191,6 +196,96 @@ const DEFAULT_ROOM_TEMPLATES = {
       { prop: 'CHAIR', position: 'random', count: 6 },
     ],
   },
+  library: {
+    weight: 1,
+    minSize: { w: 8, h: 6 },
+    placements: [
+      { prop: 'SHELF', position: 'wall-top', count: 1 },
+      { prop: 'SHELF', position: 'wall-left', count: 1 },
+      { prop: 'SHELF', position: 'wall-right', count: 1 },
+      { prop: 'TABLE_2X2', position: 'center', count: 1 },
+      { prop: 'CHAIR', position: 'random', count: 2 },
+    ],
+  },
+  armory: {
+    weight: 1,
+    minSize: { w: 8, h: 6 },
+    placements: [
+      { prop: 'WEAPON_RACK', position: 'wall-top', count: 1 },
+      { prop: 'WEAPON_RACK', position: 'wall-bottom', count: 1 },
+      { prop: 'CRATE', position: 'random', count: 2 },
+      { prop: 'BARREL', position: 'random', count: 1 },
+    ],
+  },
+  prison: {
+    weight: 1,
+    minSize: { w: 10, h: 8 },
+    placements: [
+      { prop: 'CAGE', position: 'random', count: 3 },
+      { prop: 'BARREL', position: 'random', count: 1 },
+      { prop: 'TORCH_STAND', position: 'wall-left', count: 1 },
+      { prop: 'TORCH_STAND', position: 'wall-right', count: 1 },
+    ],
+  },
+  treasure: {
+    weight: 0.5,
+    minSize: { w: 8, h: 8 },
+    placements: [
+      { prop: 'CHEST', position: 'random', count: 3 },
+      { prop: 'PILLAR', position: 'random', count: 4 },
+    ],
+  },
+  barracks: {
+    weight: 1,
+    minSize: { w: 12, h: 8 },
+    placements: [
+      { prop: 'BED_SINGLE', position: 'wall-left', count: 2 },
+      { prop: 'BED_SINGLE', position: 'wall-right', count: 2 },
+      { prop: 'CHEST', position: 'random', count: 2 },
+    ],
+  },
+  mess_hall: {
+    weight: 1,
+    minSize: { w: 14, h: 10 },
+    placements: [
+      { prop: 'TABLE_4X2', position: 'center', count: 1 },
+      { prop: 'CHAIR', position: 'random', count: 8 },
+      { prop: 'BARREL', position: 'wall-right', count: 2 },
+    ],
+  },
+  workshop: {
+    weight: 1,
+    minSize: { w: 8, h: 6 },
+    placements: [
+      { prop: 'ANVIL', position: 'center', count: 1 },
+      { prop: 'WEAPON_RACK', position: 'wall-top', count: 1 },
+      { prop: 'BARREL', position: 'random', count: 1 },
+      { prop: 'CRATE', position: 'random', count: 1 },
+    ],
+  },
+  guard_room: {
+    weight: 1,
+    minSize: { w: 8, h: 6 },
+    placements: [
+      { prop: 'TABLE_2X2', position: 'center', count: 1 },
+      { prop: 'CHAIR', position: 'random', count: 2 },
+      { prop: 'WEAPON_RACK', position: 'wall-top', count: 1 },
+      { prop: 'TORCH_STAND', position: 'wall-left', count: 1 },
+      { prop: 'TORCH_STAND', position: 'wall-right', count: 1 },
+    ],
+  },
+  crypt: {
+    weight: 1,
+    minSize: { w: 10, h: 8 },
+    placements: [
+      { prop: 'STATUE', position: 'wall-left', count: 1 },
+      { prop: 'STATUE', position: 'wall-right', count: 1 },
+      { prop: 'ALTAR', position: 'center', count: 1 },
+      { prop: 'PILLAR', position: 'random', count: 2 },
+      { prop: 'TORCH_STAND', position: 'wall-top', count: 1 },
+      { prop: 'TORCH_STAND', position: 'wall-bottom', count: 1 },
+    ],
+  },
 };
 
 const DEFAULT_TORCHES = { min: 1, max: 2 };
@@ -204,7 +299,8 @@ let weightedRoomTypes = null; // lazily built
 function buildWeightedTypes() {
   const types = [];
   for (const [name, tmpl] of Object.entries(roomTemplates)) {
-    const w = tmpl.weight || 1;
+    // Support fractional weights by scaling to integers (multiply by 2)
+    const w = Math.round((tmpl.weight || 1) * 2);
     for (let i = 0; i < w; i++) types.push(name);
   }
   weightedRoomTypes = types;
@@ -272,15 +368,26 @@ function getObjDims(objKey, rotation = 0) {
   return { w: cells[0].length, h: cells.length };
 }
 
-// Check if an area is all FLOOR and has no overlay
+// Check if an area is all FLOOR, has no overlay, and doesn't neighbor any doors
 function areaFree(x, y, w, h, mapData, mapWidth, mapHeight, overlay) {
   for (let dy = 0; dy < h; dy++) {
     for (let dx = 0; dx < w; dx++) {
       const px = x + dx;
       const py = y + dy;
       if (px < 0 || px >= mapWidth || py < 0 || py >= mapHeight) return false;
-      if (mapData[py * mapWidth + px] !== 2) return false; // TILE.FLOOR = 2
+      const t = mapData[py * mapWidth + px];
+      if (t !== 2 && t !== 5 && t !== 8 && t !== 9) return false; // FLOOR, GRASS, PATH, STONE
       if (overlay.has(overlayKey(px, py))) return false;
+    }
+  }
+  // Check 1-tile buffer around the footprint for doors (DOOR_CLOSED=3, DOOR_OPEN=4)
+  for (let dy = -1; dy <= h; dy++) {
+    for (let dx = -1; dx <= w; dx++) {
+      const px = x + dx;
+      const py = y + dy;
+      if (px < 0 || px >= mapWidth || py < 0 || py >= mapHeight) continue;
+      const t = mapData[py * mapWidth + px];
+      if (t === 3 || t === 4) return false; // adjacent to door
     }
   }
   return true;
@@ -295,45 +402,48 @@ function placeObj(objKey, x, y, rot, overlay) {
 }
 
 function tryPlace(objKey, room, mapData, mapWidth, mapHeight, overlay, position) {
-  const rot = Math.floor(Math.random() * 4);
-  const dims = getObjDims(objKey, rot);
-  let x, y;
+  const maxAttempts = 5;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const rot = Math.floor(Math.random() * 4);
+    const dims = getObjDims(objKey, rot);
+    let x, y;
 
-  if (position === 'center') {
-    x = room.x + Math.floor((room.w - dims.w) / 2);
-    y = room.y + Math.floor((room.h - dims.h) / 2);
-  } else if (position === 'wall-top') {
-    x = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - dims.w - 2));
-    y = room.y;
-  } else if (position === 'wall-bottom') {
-    x = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - dims.w - 2));
-    y = room.y + room.h - dims.h;
-  } else if (position === 'wall-left') {
-    x = room.x;
-    y = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - dims.h - 2));
-  } else if (position === 'wall-right') {
-    x = room.x + room.w - dims.w;
-    y = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - dims.h - 2));
-  } else {
-    // Random interior
-    x = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - dims.w - 2));
-    y = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - dims.h - 2));
-  }
+    if (position === 'center') {
+      x = room.x + Math.floor((room.w - dims.w) / 2);
+      y = room.y + Math.floor((room.h - dims.h) / 2);
+    } else if (position === 'wall-top') {
+      x = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - dims.w - 2));
+      y = room.y;
+    } else if (position === 'wall-bottom') {
+      x = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - dims.w - 2));
+      y = room.y + room.h - dims.h;
+    } else if (position === 'wall-left') {
+      x = room.x;
+      y = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - dims.h - 2));
+    } else if (position === 'wall-right') {
+      x = room.x + room.w - dims.w;
+      y = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - dims.h - 2));
+    } else {
+      // Random interior
+      x = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - dims.w - 2));
+      y = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - dims.h - 2));
+    }
 
-  if (areaFree(x, y, dims.w, dims.h, mapData, mapWidth, mapHeight, overlay)) {
-    placeObj(objKey, x, y, rot, overlay);
-    return true;
+    if (areaFree(x, y, dims.w, dims.h, mapData, mapWidth, mapHeight, overlay)) {
+      placeObj(objKey, x, y, rot, overlay);
+      return true;
+    }
+    // For center position, no point retrying (same coords each time)
+    if (position === 'center') return false;
   }
   return false;
 }
 
 function placeTorches(room, mapData, mapWidth, mapHeight, overlay) {
-  const count = torchConfig.min + Math.floor(Math.random() * (torchConfig.max - torchConfig.min + 1));
+  if (Math.random() > 0.30) return; // 70% of rooms: no torches
   const walls = ['wall-top', 'wall-bottom', 'wall-left', 'wall-right'];
-  for (let i = 0; i < count; i++) {
-    const wall = walls[Math.floor(Math.random() * walls.length)];
-    tryPlace('TORCH_STAND', room, mapData, mapWidth, mapHeight, overlay, wall);
-  }
+  const wall = walls[Math.floor(Math.random() * walls.length)];
+  tryPlace('TORCH_STAND', room, mapData, mapWidth, mapHeight, overlay, wall);
 }
 
 export function furnishRoom(room, mapData, mapWidth, mapHeight, overlay) {
@@ -343,9 +453,24 @@ export function furnishRoom(room, mapData, mapWidth, mapHeight, overlay) {
   if (!weightedRoomTypes) buildWeightedTypes();
   if (weightedRoomTypes.length === 0) return;
 
-  const typeName = weightedRoomTypes[Math.floor(Math.random() * weightedRoomTypes.length)];
-  const tmpl = roomTemplates[typeName];
-  if (!tmpl) return;
+  // Pick a template, falling back to empty/storage if room is too small for the chosen one
+  let typeName, tmpl;
+  for (let pick = 0; pick < 5; pick++) {
+    typeName = weightedRoomTypes[Math.floor(Math.random() * weightedRoomTypes.length)];
+    tmpl = roomTemplates[typeName];
+    if (!tmpl) continue;
+    if (tmpl.minSize && (room.w < tmpl.minSize.w || room.h < tmpl.minSize.h)) {
+      tmpl = null;
+      continue;
+    }
+    break;
+  }
+  if (!tmpl) {
+    // Fall back to empty
+    typeName = 'empty';
+    tmpl = roomTemplates.empty;
+    if (!tmpl) return;
+  }
 
   for (const placement of tmpl.placements) {
     // Optional placement (chance)
@@ -364,5 +489,65 @@ export function furnishRoom(room, mapData, mapWidth, mapHeight, overlay) {
     }
   }
 
+  // Pillar configurations for larger rooms (30% chance for eligible rooms)
+  if (Math.random() < 0.30) {
+    placePillarConfig(room, mapData, mapWidth, mapHeight, overlay);
+  }
+
   placeTorches(room, mapData, mapWidth, mapHeight, overlay);
+}
+
+function placePillarConfig(room, mapData, mapWidth, mapHeight, overlay) {
+  const tryPillar = (px, py) => {
+    if (px < 0 || px >= mapWidth || py < 0 || py >= mapHeight) return;
+    if (areaFree(px, py, 1, 1, mapData, mapWidth, mapHeight, overlay)) {
+      placeObj('PILLAR', px, py, 0, overlay);
+    }
+  };
+
+  const roll = Math.random();
+
+  if (roll < 0.35 && room.w >= 10 && room.h >= 8) {
+    // Corner pillars
+    tryPillar(room.x + 2, room.y + 2);
+    tryPillar(room.x + room.w - 3, room.y + 2);
+    tryPillar(room.x + 2, room.y + room.h - 3);
+    tryPillar(room.x + room.w - 3, room.y + room.h - 3);
+  } else if (roll < 0.55 && room.w >= 16) {
+    // Pillar rows: two parallel rows dividing the room
+    const rowY1 = room.y + Math.floor(room.h * 0.33);
+    const rowY2 = room.y + Math.floor(room.h * 0.67);
+    const count = 2 + Math.floor(Math.random() * 2); // 2-3 pillars per row
+    const spacing = Math.floor((room.w - 4) / (count + 1));
+    for (let i = 1; i <= count; i++) {
+      tryPillar(room.x + 2 + i * spacing, rowY1);
+      tryPillar(room.x + 2 + i * spacing, rowY2);
+    }
+  } else if (roll < 0.80 && room.w >= 8) {
+    // Wall-line pillars: 2-3 pillars along one wall, evenly spaced
+    const count = 2 + Math.floor(Math.random() * 2);
+    const side = Math.floor(Math.random() * 4);
+    const spacing = Math.floor((side < 2 ? room.w : room.h) / (count + 1));
+    for (let i = 1; i <= count; i++) {
+      if (side === 0) tryPillar(room.x + i * spacing, room.y + 1);
+      else if (side === 1) tryPillar(room.x + i * spacing, room.y + room.h - 2);
+      else if (side === 2) tryPillar(room.x + 1, room.y + i * spacing);
+      else tryPillar(room.x + room.w - 2, room.y + i * spacing);
+    }
+  } else if (room.w >= 8 && room.h >= 6) {
+    // Entrance pillars: place pillars flanking doorways (1 tile into the room)
+    // Scan perimeter for doors
+    for (let rx = room.x; rx < room.x + room.w; rx++) {
+      if (room.y > 0 && (mapData[(room.y - 1) * mapWidth + rx] === 3 || mapData[(room.y - 1) * mapWidth + rx] === 4)) {
+        tryPillar(rx - 1, room.y + 1);
+        tryPillar(rx + 1, room.y + 1);
+        break;
+      }
+      if (room.y + room.h < mapHeight && (mapData[(room.y + room.h) * mapWidth + rx] === 3 || mapData[(room.y + room.h) * mapWidth + rx] === 4)) {
+        tryPillar(rx - 1, room.y + room.h - 2);
+        tryPillar(rx + 1, room.y + room.h - 2);
+        break;
+      }
+    }
+  }
 }

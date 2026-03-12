@@ -10,6 +10,7 @@ export const MOVE_COOLDOWN = 150; // ms
 // FOV settings
 export const FOV_RADIUS = 10;
 export const FOV_GRACE_RADIUS = 2;
+export const TORCH_VISION_RADIUS = 5;
 
 // Tile types
 export const TILE = {

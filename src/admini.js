@@ -296,7 +296,7 @@ socket.on('adminPlayerLeft', ({ id }) => {
 socket.on('motherWingAdded', ({ playerId, name, color, chunks }) => {
   if (viewMode !== 'mother') return;
   const gm = new GameMap();
-  gm.initBounds(layerBounds || { maxX: 160, maxY: 120 });
+  gm.initBounds(layerBounds || { maxX: 200, maxY: 160 });
   gm.loadChunks(chunks);
   motherData.wings.set(playerId, { name, color, gameMap: gm });
 });
@@ -361,6 +361,11 @@ socket.on('doorPlaced', ({ layerId, door }) => {
     const ty = door.orientation === 'vertical' ? door.y + i : door.y;
     gameMap.setTile(tx, ty, 3); // DOOR_CLOSED
   }
+});
+
+socket.on('doorState', ({ layerId, doorId, isOpen, tiles }) => {
+  if (layerId !== activeLayerId) return;
+  gameMap.setDoorState(doorId, isOpen, tiles);
 });
 
 socket.on('doorRemoved', ({ layerId, doorIds }) => {

@@ -1,11 +1,15 @@
 const keys = {};
 let interactPressed = false;
+let hurtPressed = false;
 
 export function initInput() {
   window.addEventListener('keydown', (e) => {
     keys[e.code] = true;
     if (e.code === 'KeyE') {
       interactPressed = true;
+    }
+    if (e.code === 'KeyH') {
+      hurtPressed = true;
     }
   });
   window.addEventListener('keyup', (e) => {
@@ -30,6 +34,15 @@ export function getMovementDir() {
 export function consumeInteract() {
   if (interactPressed) {
     interactPressed = false;
+    return true;
+  }
+  return false;
+}
+
+/** Returns true once per H key press (debug hurt) */
+export function consumeHurt() {
+  if (hurtPressed) {
+    hurtPressed = false;
     return true;
   }
   return false;

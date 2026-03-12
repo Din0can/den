@@ -7,10 +7,10 @@ import { CHUNK_SIZE, chunkKey, parseChunkKey, worldToChunk, chunkIndex } from '.
 
 const TILE = {
   VOID: 0, WALL: 1, FLOOR: 2, DOOR_CLOSED: 3, DOOR_OPEN: 4,
-  GRASS: 5, WALL_MOSSY: 6, ENTRY: 7,
+  GRASS: 5, WALL_MOSSY: 6, ENTRY: 7, PATH: 8, STONE: 9,
 };
 
-const MIN_CELL = 18;
+const MIN_CELL = 16;
 const MAX_DEPTH = 6;
 
 function overlayKey(x, y) {
@@ -40,13 +40,80 @@ export function generateDungeon(width, height, roomCount = 35) {
   connectBSP(root, rooms, set, get, width, height);
 
   // --- Add extra random corridors for loops ---
-  const extraCount = 2 + Math.floor(Math.random() * 3); // 2-4
+  const extraCount = 4 + Math.floor(Math.random() * 4); // 4-7
   for (let i = 0; i < extraCount && rooms.length > 2; i++) {
     const a = rooms[Math.floor(Math.random() * rooms.length)];
     const b = rooms[Math.floor(Math.random() * rooms.length)];
     if (a !== b) {
       carveWideCorridor(a.cx, a.cy, b.cx, b.cy, set, get, width, height);
     }
+  }
+
+  // --- Dead-end branches ---
+  const deadEndCount = 2 + Math.floor(Math.random() * 3); // 2-4
+  const deadEnds = [];
+  for (let attempt = 0; attempt < deadEndCount * 10 && deadEnds.length < deadEndCount; attempt++) {
+    // Pick a random floor tile that's in a corridor (not inside any room)
+    const sx = 3 + Math.floor(Math.random() * (width - 6));
+    const sy = 3 + Math.floor(Math.random() * (height - 6));
+    if (get(sx, sy) !== TILE.FLOOR) continue;
+
+    let inRoom = false;
+    for (const r of rooms) {
+      if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
+        inRoom = true;
+        break;
+      }
+    }
+    if (inRoom) continue;
+
+    // Pick a random cardinal direction
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const dir = dirs[Math.floor(Math.random() * dirs.length)];
+    const branchLen = 4 + Math.floor(Math.random() * 5); // 4-8 tiles
+
+    // Check if we can carve in that direction (all void)
+    let canCarve = true;
+    for (let step = 1; step <= branchLen + 2; step++) {
+      const nx = sx + dir[0] * step;
+      const ny = sy + dir[1] * step;
+      if (nx < 2 || nx >= width - 2 || ny < 2 || ny >= height - 2) { canCarve = false; break; }
+      // Check a 3-wide swath for void
+      const perp = dir[0] === 0 ? [1, 0] : [0, 1];
+      for (let p = -1; p <= 1; p++) {
+        const t = get(nx + perp[0] * p, ny + perp[1] * p);
+        if (step > 1 && t !== TILE.VOID) { canCarve = false; break; }
+      }
+      if (!canCarve) break;
+    }
+    if (!canCarve) continue;
+
+    // Carve the branch (2-wide)
+    for (let step = 1; step <= branchLen; step++) {
+      const nx = sx + dir[0] * step;
+      const ny = sy + dir[1] * step;
+      set(nx, ny, TILE.FLOOR);
+      // Make it 2-wide
+      const perp = dir[0] === 0 ? [1, 0] : [0, 1];
+      set(nx + perp[0], ny + perp[1], TILE.FLOOR);
+    }
+
+    // Carve 3×3 or 4×4 alcove at the end
+    const endX = sx + dir[0] * branchLen;
+    const endY = sy + dir[1] * branchLen;
+    const alcoveSize = Math.random() > 0.5 ? 3 : 4;
+    const ax = endX - Math.floor(alcoveSize / 2);
+    const ay = endY - Math.floor(alcoveSize / 2);
+    for (let dy = 0; dy < alcoveSize; dy++) {
+      for (let dx = 0; dx < alcoveSize; dx++) {
+        const px = ax + dx, py = ay + dy;
+        if (px >= 1 && px < width - 1 && py >= 1 && py < height - 1) {
+          set(px, py, TILE.FLOOR);
+        }
+      }
+    }
+
+    deadEnds.push({ x: endX, y: endY, alcoveSize });
   }
 
   // --- Wall derivation pass ---
@@ -81,28 +148,107 @@ export function generateDungeon(width, height, roomCount = 35) {
     set(rooms[0].cx, rooms[0].cy, TILE.ENTRY);
   }
 
-  // --- Grass + mossy walls ---
-  const grassRooms = new Set();
-  for (let ri = 0; ri < rooms.length; ri++) {
-    if (Math.random() < 0.15) {
-      grassRooms.add(ri);
-      const room = rooms[ri];
+  // --- Overgrown zones + stone floor variation ---
+  // Pick 2-4 overgrown zone centers
+  const zoneCount = 2 + Math.floor(Math.random() * 3);
+  const zones = [];
+  for (let i = 0; i < zoneCount; i++) {
+    zones.push({
+      cx: Math.floor(Math.random() * width),
+      cy: Math.floor(Math.random() * height),
+      radius: 20 + Math.floor(Math.random() * 11), // 20-30
+    });
+  }
+
+  function inOvergrownZone(x, y) {
+    for (const z of zones) {
+      const dx = x - z.cx, dy = y - z.cy;
+      if (dx * dx + dy * dy <= z.radius * z.radius) return true;
+    }
+    return false;
+  }
+
+  // Apply overgrown treatment to rooms
+  for (const room of rooms) {
+    const roomInZone = inOvergrownZone(room.cx, room.cy);
+
+    if (roomInZone) {
+      const roll = Math.random();
+      let floorChance, wallChance;
+      if (roll < 0.40) {
+        floorChance = 0.45 + Math.random() * 0.20;
+        wallChance = 0.40 + Math.random() * 0.20;
+      } else {
+        floorChance = 0.10 + Math.random() * 0.20;
+        wallChance = 0.10 + Math.random() * 0.15;
+      }
+
       for (let ry = room.y; ry < room.y + room.h; ry++) {
         for (let rx = room.x; rx < room.x + room.w; rx++) {
-          if (get(rx, ry) === TILE.FLOOR && Math.random() < 0.4) {
+          if (get(rx, ry) === TILE.FLOOR && Math.random() < floorChance) {
             set(rx, ry, TILE.GRASS);
+          }
+        }
+      }
+      // Mossy walls around room
+      for (let ry = room.y - 1; ry <= room.y + room.h; ry++) {
+        for (let rx = room.x - 1; rx <= room.x + room.w; rx++) {
+          if (get(rx, ry) === TILE.WALL && Math.random() < wallChance) {
+            set(rx, ry, TILE.WALL_MOSSY);
+          }
+        }
+      }
+    } else if (Math.random() < 0.05) {
+      // Outside zones: rare minor grass/moss (5% of rooms)
+      const floorChance = 0.1 + Math.random() * 0.1;
+      const wallChance = 0.1 + Math.random() * 0.1;
+      for (let ry = room.y; ry < room.y + room.h; ry++) {
+        for (let rx = room.x; rx < room.x + room.w; rx++) {
+          if (get(rx, ry) === TILE.FLOOR && Math.random() < floorChance) {
+            set(rx, ry, TILE.GRASS);
+          }
+        }
+      }
+      for (let ry = room.y - 1; ry <= room.y + room.h; ry++) {
+        for (let rx = room.x - 1; rx <= room.x + room.w; rx++) {
+          if (get(rx, ry) === TILE.WALL && Math.random() < wallChance) {
+            set(rx, ry, TILE.WALL_MOSSY);
           }
         }
       }
     }
   }
 
-  for (const ri of grassRooms) {
-    const room = rooms[ri];
-    for (let ry = room.y - 1; ry <= room.y + room.h; ry++) {
-      for (let rx = room.x - 1; rx <= room.x + room.w; rx++) {
-        if (get(rx, ry) === TILE.WALL && Math.random() < 0.3) {
-          set(rx, ry, TILE.WALL_MOSSY);
+  // Corridor overgrown: apply grass/moss to corridor tiles in overgrown zones
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!inOvergrownZone(x, y)) continue;
+      const t = get(x, y);
+      // Only affect tiles not inside room bounding boxes (corridor tiles)
+      let inRoom = false;
+      for (const r of rooms) {
+        if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) {
+          inRoom = true;
+          break;
+        }
+      }
+      if (inRoom) continue;
+      if (t === TILE.FLOOR && Math.random() < 0.4) {
+        set(x, y, TILE.GRASS);
+      } else if (t === TILE.WALL && Math.random() < 0.3) {
+        set(x, y, TILE.WALL_MOSSY);
+      }
+    }
+  }
+
+  // Stone floor variation: 10% of rooms get STONE floors
+  for (const room of rooms) {
+    if (Math.random() < 0.10) {
+      for (let ry = room.y; ry < room.y + room.h; ry++) {
+        for (let rx = room.x; rx < room.x + room.w; rx++) {
+          if (get(rx, ry) === TILE.FLOOR) {
+            set(rx, ry, TILE.STONE);
+          }
         }
       }
     }
@@ -112,6 +258,22 @@ export function generateDungeon(width, height, roomCount = 35) {
   const overlay = new Map();
   for (const room of rooms) {
     furnishRoom(room, map, width, height, overlay);
+  }
+
+  // --- Corridor decoration pass (torches, pillar pairs, moss) ---
+  decorateCorridors(map, width, height, rooms, overlay);
+
+  // --- Dead-end loot ---
+  for (const de of deadEnds) {
+    if (Math.random() < 0.6) { // 60% chance of loot in dead ends
+      const oKey = overlayKey(de.x, de.y);
+      if (!overlay.has(oKey) && get(de.x, de.y) === TILE.FLOOR) {
+        const loot = Math.random() < 0.4
+          ? { char: '▣', color: '#DAA520', passable: false }  // chest
+          : { char: '◎', color: '#8B4513', passable: false }; // barrel
+        overlay.set(oKey, loot);
+      }
+    }
   }
 
   const overlayArray = [];
@@ -176,18 +338,26 @@ function placeRooms(node, rooms, set, mapW, mapH) {
   let rw, rh;
   const roll = Math.random();
 
-  if (roll < 0.10 && maxW >= 14 && maxH >= 12) {
+  if (roll < 0.05 && maxW >= 20 && maxH >= 16) {
+    // 5% grand room
+    rw = 20 + Math.floor(Math.random() * Math.min(9, maxW - 19));
+    rh = 16 + Math.floor(Math.random() * Math.min(7, maxH - 15));
+  } else if (roll < 0.15 && maxW >= 16 && maxH >= 12) {
     // 10% large room
-    rw = 14 + Math.floor(Math.random() * Math.min(7, maxW - 13));
+    rw = 16 + Math.floor(Math.random() * Math.min(9, maxW - 15));
     rh = 12 + Math.floor(Math.random() * Math.min(7, maxH - 11));
-  } else if (roll < 0.30 && maxW >= 10 && maxH >= 8) {
+  } else if (roll < 0.30 && maxW >= 12 && maxH >= 9) {
+    // 15% medium room
+    rw = 12 + Math.floor(Math.random() * Math.min(7, maxW - 11));
+    rh = 9 + Math.floor(Math.random() * Math.min(6, maxH - 8));
+  } else if (roll < 0.50 && maxW >= 10 && maxH >= 8) {
     // 20% L-shaped room
     placeLShapedRoom(node, pad, maxW, maxH, rooms, set);
     return;
   } else {
-    // 70% normal room
-    rw = 6 + Math.floor(Math.random() * Math.min(9, maxW - 5));
-    rh = 5 + Math.floor(Math.random() * Math.min(7, maxH - 4));
+    // 50% normal room
+    rw = 8 + Math.floor(Math.random() * Math.min(9, maxW - 7));
+    rh = 6 + Math.floor(Math.random() * Math.min(8, maxH - 5));
   }
 
   rw = Math.min(rw, maxW);
@@ -202,10 +372,10 @@ function placeRooms(node, rooms, set, mapW, mapH) {
 
 function placeLShapedRoom(node, pad, maxW, maxH, rooms, set) {
   // Two overlapping rectangles forming an L
-  const w1 = 6 + Math.floor(Math.random() * Math.min(5, maxW - 5));
-  const h1 = 5 + Math.floor(Math.random() * Math.min(4, maxH - 4));
-  const w2 = 4 + Math.floor(Math.random() * Math.min(4, maxW - 3));
-  const h2 = 4 + Math.floor(Math.random() * Math.min(3, maxH - 3));
+  const w1 = 8 + Math.floor(Math.random() * Math.min(7, maxW - 7));
+  const h1 = 6 + Math.floor(Math.random() * Math.min(5, maxH - 5));
+  const w2 = 5 + Math.floor(Math.random() * Math.min(5, maxW - 4));
+  const h2 = 5 + Math.floor(Math.random() * Math.min(4, maxH - 4));
 
   const rx = node.x + pad + Math.floor(Math.random() * Math.max(1, maxW - Math.max(w1, w2) + 1));
   const ry = node.y + pad + Math.floor(Math.random() * Math.max(1, maxH - (h1 + h2) + 1));
@@ -274,27 +444,182 @@ function getLeafRooms(node, allRooms) {
   return result;
 }
 
-// --- Wide Corridor Carving ---
-function carveWideCorridor(x1, y1, x2, y2, set, get, mapW, mapH) {
-  const corridorWidth = 2 + Math.floor(Math.random() * 2); // 2 or 3
-  const offsets = corridorWidth === 2 ? [0, 1] : [-1, 0, 1];
+// --- Wide Corridor Carving (multiple styles) ---
+export function carveVariedCorridor(x1, y1, x2, y2, set, get, mapW, mapH, rng = Math.random) {
+  // Width variation: 2 (60%), 3 (30%), 4 (10%)
+  const wRoll = rng();
+  const corridorWidth = wRoll < 0.60 ? 2 : wRoll < 0.90 ? 3 : 4;
+  const offsets = corridorWidth === 2 ? [0, 1] :
+                  corridorWidth === 3 ? [-1, 0, 1] : [-1, 0, 1, 2];
 
-  const horizontalFirst = Math.random() > 0.5;
+  // Style selection
+  const styleRoll = rng();
+
+  if (styleRoll < 0.50) {
+    carveLBend(x1, y1, x2, y2, offsets, corridorWidth, set, mapW, mapH, rng);
+  } else if (styleRoll < 0.75) {
+    carveSBend(x1, y1, x2, y2, offsets, corridorWidth, set, mapW, mapH, rng);
+  } else if (styleRoll < 0.90) {
+    carveDogLeg(x1, y1, x2, y2, offsets, corridorWidth, set, mapW, mapH, rng);
+  } else {
+    carveStraightWithAlcove(x1, y1, x2, y2, offsets, corridorWidth, set, mapW, mapH, rng);
+  }
+}
+
+function carveWideCorridor(x1, y1, x2, y2, set, get, mapW, mapH) {
+  carveVariedCorridor(x1, y1, x2, y2, set, get, mapW, mapH, Math.random);
+}
+
+/**
+ * Carve a corridor with waypoint rooms for long distances.
+ * For corridors > 40 Manhattan distance, places small rooms along the path
+ * and connects them with carveVariedCorridor segments.
+ * Waypoint rooms are pushed into the rooms array for furniture/decoration.
+ */
+export function carveCorridorWithWaypoints(x1, y1, x2, y2, set, get, mapW, mapH, rng, rooms) {
+  const dist = Math.abs(x2 - x1) + Math.abs(y2 - y1);
+
+  if (dist <= 40) {
+    carveVariedCorridor(x1, y1, x2, y2, set, get, mapW, mapH, rng);
+    return;
+  }
+
+  const waypointCount = Math.min(3, Math.floor(dist / 40));
+  const points = [{ x: x1, y: y1 }];
+
+  for (let i = 1; i <= waypointCount; i++) {
+    const t = i / (waypointCount + 1);
+    const baseX = Math.round(x1 + (x2 - x1) * t);
+    const baseY = Math.round(y1 + (y2 - y1) * t);
+    const jitterX = Math.floor((rng() - 0.5) * 16); // ±8
+    const jitterY = Math.floor((rng() - 0.5) * 16);
+    const wx = Math.max(3, Math.min(mapW - 4, baseX + jitterX));
+    const wy = Math.max(3, Math.min(mapH - 4, baseY + jitterY));
+
+    // Carve a small waypoint room (5-7 × 5-7)
+    const rw = 5 + Math.floor(rng() * 3);
+    const rh = 5 + Math.floor(rng() * 3);
+    const rx = Math.max(1, Math.min(mapW - rw - 1, wx - Math.floor(rw / 2)));
+    const ry = Math.max(1, Math.min(mapH - rh - 1, wy - Math.floor(rh / 2)));
+
+    for (let dy = 0; dy < rh; dy++) {
+      for (let dx = 0; dx < rw; dx++) {
+        set(rx + dx, ry + dy, TILE.FLOOR);
+      }
+    }
+
+    const room = {
+      x: rx, y: ry, w: rw, h: rh,
+      cx: Math.floor(rx + rw / 2),
+      cy: Math.floor(ry + rh / 2),
+    };
+    if (rooms) rooms.push(room);
+    points.push({ x: room.cx, y: room.cy });
+  }
+
+  points.push({ x: x2, y: y2 });
+
+  // Connect waypoints sequentially
+  for (let i = 0; i < points.length - 1; i++) {
+    carveVariedCorridor(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, set, get, mapW, mapH, rng);
+  }
+}
+
+function carveLBend(x1, y1, x2, y2, offsets, cw, set, mapW, mapH, rng) {
+  const horizontalFirst = rng() > 0.5;
+  if (horizontalFirst) {
+    carveHWide(x1, x2, y1, offsets, set, mapW, mapH);
+    carveVWide(y1, y2, x2, offsets, set, mapW, mapH);
+    fillCorner(x2, y1, cw, set, mapW, mapH);
+  } else {
+    carveVWide(y1, y2, x1, offsets, set, mapW, mapH);
+    carveHWide(x1, x2, y2, offsets, set, mapW, mapH);
+    fillCorner(x1, y2, cw, set, mapW, mapH);
+  }
+}
+
+function carveSBend(x1, y1, x2, y2, offsets, cw, set, mapW, mapH, rng) {
+  const midX = Math.floor((x1 + x2) / 2) + Math.floor((rng() - 0.5) * 6);
+  const midY = Math.floor((y1 + y2) / 2) + Math.floor((rng() - 0.5) * 6);
+
+  if (rng() > 0.5) {
+    // H-V-H: horizontal to midX, vertical to midY, horizontal to x2
+    carveHWide(x1, midX, y1, offsets, set, mapW, mapH);
+    carveVWide(y1, midY, midX, offsets, set, mapW, mapH);
+    carveHWide(midX, x2, midY, offsets, set, mapW, mapH);
+    carveVWide(midY, y2, x2, offsets, set, mapW, mapH);
+    fillCorner(midX, y1, cw, set, mapW, mapH);
+    fillCorner(midX, midY, cw, set, mapW, mapH);
+    fillCorner(x2, midY, cw, set, mapW, mapH);
+  } else {
+    // V-H-V: vertical to midY, horizontal to midX, vertical to y2
+    carveVWide(y1, midY, x1, offsets, set, mapW, mapH);
+    carveHWide(x1, midX, midY, offsets, set, mapW, mapH);
+    carveVWide(midY, y2, midX, offsets, set, mapW, mapH);
+    carveHWide(midX, x2, y2, offsets, set, mapW, mapH);
+    fillCorner(x1, midY, cw, set, mapW, mapH);
+    fillCorner(midX, midY, cw, set, mapW, mapH);
+    fillCorner(midX, y2, cw, set, mapW, mapH);
+  }
+}
+
+function carveDogLeg(x1, y1, x2, y2, offsets, cw, set, mapW, mapH, rng) {
+  // Mostly straight with a short perpendicular jog in the middle
+  const dx = Math.abs(x2 - x1), dy = Math.abs(y2 - y1);
+  const jogOffset = 3 + Math.floor(rng() * 4); // 3-6 tile jog
+
+  if (dx >= dy) {
+    // Primarily horizontal — add a vertical jog at midpoint
+    const midX = Math.floor((x1 + x2) / 2);
+    const jogDir = rng() > 0.5 ? jogOffset : -jogOffset;
+    carveHWide(x1, midX, y1, offsets, set, mapW, mapH);
+    carveVWide(y1, y1 + jogDir, midX, offsets, set, mapW, mapH);
+    carveHWide(midX, x2, y1 + jogDir, offsets, set, mapW, mapH);
+    carveVWide(y1 + jogDir, y2, x2, offsets, set, mapW, mapH);
+    fillCorner(midX, y1, cw, set, mapW, mapH);
+    fillCorner(midX, y1 + jogDir, cw, set, mapW, mapH);
+    fillCorner(x2, y1 + jogDir, cw, set, mapW, mapH);
+  } else {
+    // Primarily vertical — add a horizontal jog at midpoint
+    const midY = Math.floor((y1 + y2) / 2);
+    const jogDir = rng() > 0.5 ? jogOffset : -jogOffset;
+    carveVWide(y1, midY, x1, offsets, set, mapW, mapH);
+    carveHWide(x1, x1 + jogDir, midY, offsets, set, mapW, mapH);
+    carveVWide(midY, y2, x1 + jogDir, offsets, set, mapW, mapH);
+    carveHWide(x1 + jogDir, x2, y2, offsets, set, mapW, mapH);
+    fillCorner(x1, midY, cw, set, mapW, mapH);
+    fillCorner(x1 + jogDir, midY, cw, set, mapW, mapH);
+    fillCorner(x1 + jogDir, y2, cw, set, mapW, mapH);
+  }
+}
+
+function carveStraightWithAlcove(x1, y1, x2, y2, offsets, cw, set, mapW, mapH, rng) {
+  // L-bend base + 3×3 alcove at the bend point
+  const horizontalFirst = rng() > 0.5;
+  let alcoveX, alcoveY;
 
   if (horizontalFirst) {
-    // Horizontal from x1 to x2 at y1
     carveHWide(x1, x2, y1, offsets, set, mapW, mapH);
-    // Vertical from y1 to y2 at x2
     carveVWide(y1, y2, x2, offsets, set, mapW, mapH);
-    // Fill corner
-    fillCorner(x2, y1, corridorWidth, set, mapW, mapH);
+    fillCorner(x2, y1, cw, set, mapW, mapH);
+    alcoveX = Math.floor((x1 + x2) / 2);
+    alcoveY = y1;
   } else {
-    // Vertical from y1 to y2 at x1
     carveVWide(y1, y2, x1, offsets, set, mapW, mapH);
-    // Horizontal from x1 to x2 at y2
     carveHWide(x1, x2, y2, offsets, set, mapW, mapH);
-    // Fill corner
-    fillCorner(x1, y2, corridorWidth, set, mapW, mapH);
+    fillCorner(x1, y2, cw, set, mapW, mapH);
+    alcoveX = x1;
+    alcoveY = Math.floor((y1 + y2) / 2);
+  }
+
+  // Carve 3×3 alcove at midpoint
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const ax = alcoveX + dx, ay = alcoveY + dy;
+      if (ax >= 1 && ax < mapW - 1 && ay >= 1 && ay < mapH - 1) {
+        set(ax, ay, TILE.FLOOR);
+      }
+    }
   }
 }
 
@@ -325,7 +650,7 @@ function carveVWide(y1, y2, x, offsets, set, mapW, mapH) {
 }
 
 function fillCorner(cx, cy, size, set, mapW, mapH) {
-  const offsets = size === 2 ? [0, 1] : [-1, 0, 1];
+  const offsets = size === 2 ? [0, 1] : size === 4 ? [-1, 0, 1, 2] : [-1, 0, 1];
   for (const dx of offsets) {
     for (const dy of offsets) {
       const tx = cx + dx;
@@ -444,6 +769,112 @@ function createDoorGroup(x, y, length, orientation, swingDirection, doors, doorT
   }
 }
 
+// --- Corridor Decoration ---
+function decorateCorridors(map, width, height, rooms, overlay) {
+  const get = (x, y) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return TILE.VOID;
+    return map[y * width + x];
+  };
+
+  const isFloor = (t) => t === TILE.FLOOR || t === TILE.GRASS || t === TILE.STONE || t === TILE.ENTRY;
+
+  // Build set of room tiles for fast lookup
+  const roomTileSet = new Set();
+  for (const r of rooms) {
+    for (let ry = r.y; ry < r.y + r.h; ry++) {
+      for (let rx = r.x; rx < r.x + r.w; rx++) {
+        roomTileSet.add((rx << 16) | (ry & 0xFFFF));
+      }
+    }
+  }
+
+  const isCorridorFloor = (x, y) => {
+    if (!isFloor(get(x, y))) return false;
+    return !roomTileSet.has((x << 16) | (y & 0xFFFF));
+  };
+
+  // Measure corridor width at each point (count perpendicular floor neighbors)
+  const corridorWidth = (x, y) => {
+    // Check horizontal span
+    let hw = 1;
+    for (let dx = 1; isCorridorFloor(x + dx, y); dx++) hw++;
+    for (let dx = -1; isCorridorFloor(x + dx, y); dx--) hw++;
+    // Check vertical span
+    let vw = 1;
+    for (let dy = 1; isCorridorFloor(x, y + dy); dy++) vw++;
+    for (let dy = -1; isCorridorFloor(x, y + dy); dy--) vw++;
+    return Math.min(hw, vw);
+  };
+
+  // Find corridor FLOOR tiles adjacent to walls (edge of corridor)
+  const torchCandidates = [];
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      if (!isCorridorFloor(x, y)) continue;
+      // Must touch at least one wall (cardinal)
+      let adjWall = false;
+      for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) {
+        const t = get(x + dx, y + dy);
+        if (t === TILE.WALL || t === TILE.WALL_MOSSY) { adjWall = true; break; }
+      }
+      if (!adjWall) continue;
+      // Corridor must be 3+ wide so torch doesn't block passage
+      if (corridorWidth(x, y) < 3) continue;
+      torchCandidates.push({ x, y });
+    }
+  }
+
+  // Place torches at intervals of 25-35 tiles along corridor edges
+  let lastTorchDist = 0;
+  const torchInterval = 25 + Math.floor(Math.random() * 11);
+  // Shuffle candidates for variety
+  for (let i = torchCandidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [torchCandidates[i], torchCandidates[j]] = [torchCandidates[j], torchCandidates[i]];
+  }
+
+  let placedTorches = 0;
+  for (const c of torchCandidates) {
+    if (placedTorches >= 8) break;
+    // Check spacing from previously placed corridor torches
+    let tooClose = false;
+    for (const [key] of overlay) {
+      const ox = key >> 16;
+      const oy = key & 0xFFFF;
+      if (Math.abs(ox - c.x) + Math.abs(oy - c.y) < torchInterval) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (tooClose) continue;
+
+    const oKey = (c.x << 16) | (c.y & 0xFFFF);
+    if (!overlay.has(oKey)) {
+      overlay.set(oKey, { char: '¥', color: '#FF6600', passable: false });
+      placedTorches++;
+    }
+  }
+
+  // Pillar pairs in 4+ wide corridors (occasional)
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      if (!isCorridorFloor(x, y)) continue;
+      if (Math.random() > 0.003) continue; // very rare
+      const cw = corridorWidth(x, y);
+      if (cw < 4) continue;
+
+      // Place a pair of pillars flanking the passage
+      const oKey1 = (x << 16) | (y & 0xFFFF);
+      const oKey2 = ((x + 1) << 16) | (y & 0xFFFF);
+      if (!overlay.has(oKey1) && !overlay.has(oKey2) &&
+          isCorridorFloor(x, y) && isCorridorFloor(x + 1, y)) {
+        overlay.set(oKey1, { char: '○', color: '#808080', passable: false });
+        overlay.set(oKey2, { char: '○', color: '#808080', passable: false });
+      }
+    }
+  }
+}
+
 // ─── Wing Generator ──────────────────────────────────────────────────────────
 // Generates a player's personal dungeon that connects to nearby bones.
 
@@ -549,8 +980,13 @@ export function generateWing(playerSeed, boneRooms, boneChunks, layerWidth, laye
     return { chunks: new Map(), rooms: [], doors: [] };
   }
 
+  // Snapshot original room count — waypoint rooms pushed during corridor carving
+  // must NOT be iterated for bone/chain connections (causes runaway explosion).
+  const wingRoomCount = rooms.length;
+
   // Connect each wing room to the nearest bone room (personal path into bones)
-  for (const wRoom of rooms) {
+  for (let i = 0; i < wingRoomCount; i++) {
+    const wRoom = rooms[i];
     let nearest = null;
     let bestDist = Infinity;
     for (const bRoom of boneRooms) {
@@ -558,13 +994,78 @@ export function generateWing(playerSeed, boneRooms, boneChunks, layerWidth, laye
       if (d < bestDist) { bestDist = d; nearest = bRoom; }
     }
     if (nearest) {
-      carveSeededCorridor(wRoom.cx, wRoom.cy, nearest.cx, nearest.cy, set, rng, layerWidth, layerHeight);
+      carveCorridorWithWaypoints(wRoom.cx, wRoom.cy, nearest.cx, nearest.cy, set, get, layerWidth, layerHeight, rng, rooms);
     }
   }
 
-  // Connect wing rooms to each other (chain)
-  for (let i = 1; i < rooms.length; i++) {
-    carveSeededCorridor(rooms[i - 1].cx, rooms[i - 1].cy, rooms[i].cx, rooms[i].cy, set, rng, layerWidth, layerHeight);
+  // Connect wing rooms to each other (chain) — only original rooms
+  for (let i = 1; i < wingRoomCount; i++) {
+    carveCorridorWithWaypoints(rooms[i - 1].cx, rooms[i - 1].cy, rooms[i].cx, rooms[i].cy, set, get, layerWidth, layerHeight, rng, rooms);
+  }
+
+  // Extra random corridors for loops
+  const extraCount = 2 + Math.floor(rng() * 3); // 2-4
+  for (let i = 0; i < extraCount && rooms.length > 2; i++) {
+    const a = rooms[Math.floor(rng() * rooms.length)];
+    const b = rooms[Math.floor(rng() * rooms.length)];
+    if (a !== b) carveVariedCorridor(a.cx, a.cy, b.cx, b.cy, set, get, layerWidth, layerHeight, rng);
+  }
+
+  // Dead-end branches off corridors
+  const deadEndCount = 1 + Math.floor(rng() * 3); // 1-3
+  const deadEnds = [];
+  for (let attempt = 0; attempt < deadEndCount * 10 && deadEnds.length < deadEndCount; attempt++) {
+    const sx = 3 + Math.floor(rng() * (layerWidth - 6));
+    const sy = 3 + Math.floor(rng() * (layerHeight - 6));
+    if (get(sx, sy) !== TILE.FLOOR) continue;
+
+    // Skip if inside a room
+    let inRoom = false;
+    for (const r of rooms) {
+      if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) { inRoom = true; break; }
+    }
+    if (inRoom) continue;
+
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const dir = dirs[Math.floor(rng() * dirs.length)];
+    const branchLen = 4 + Math.floor(rng() * 5); // 4-8
+
+    let canCarve = true;
+    for (let step = 1; step <= branchLen + 2; step++) {
+      const nx = sx + dir[0] * step;
+      const ny = sy + dir[1] * step;
+      if (nx < 2 || nx >= layerWidth - 2 || ny < 2 || ny >= layerHeight - 2) { canCarve = false; break; }
+      const perp = dir[0] === 0 ? [1, 0] : [0, 1];
+      for (let p = -1; p <= 1; p++) {
+        const t = get(nx + perp[0] * p, ny + perp[1] * p);
+        if (step > 1 && t !== TILE.VOID) { canCarve = false; break; }
+      }
+      if (!canCarve) break;
+    }
+    if (!canCarve) continue;
+
+    for (let step = 1; step <= branchLen; step++) {
+      const nx = sx + dir[0] * step;
+      const ny = sy + dir[1] * step;
+      set(nx, ny, TILE.FLOOR);
+      const perp = dir[0] === 0 ? [1, 0] : [0, 1];
+      set(nx + perp[0], ny + perp[1], TILE.FLOOR);
+    }
+
+    const endX = sx + dir[0] * branchLen;
+    const endY = sy + dir[1] * branchLen;
+    const alcoveSize = rng() > 0.5 ? 3 : 4;
+    const ax = endX - Math.floor(alcoveSize / 2);
+    const ay = endY - Math.floor(alcoveSize / 2);
+    for (let dy = 0; dy < alcoveSize; dy++) {
+      for (let dx = 0; dx < alcoveSize; dx++) {
+        const px = ax + dx, py = ay + dy;
+        if (px >= 1 && px < layerWidth - 1 && py >= 1 && py < layerHeight - 1) {
+          set(px, py, TILE.FLOOR);
+        }
+      }
+    }
+    deadEnds.push({ x: endX, y: endY, alcoveSize });
   }
 
   // Wall derivation
@@ -583,12 +1084,88 @@ export function generateWing(playerSeed, boneRooms, boneChunks, layerWidth, laye
     }
   }
 
+  // Overgrown zones + stone floor variation
+  const zoneCount = 1 + Math.floor(rng() * 2); // 1-2
+  const zones = [];
+  for (let i = 0; i < zoneCount; i++) {
+    zones.push({
+      cx: Math.floor(rng() * layerWidth),
+      cy: Math.floor(rng() * layerHeight),
+      radius: 20 + Math.floor(rng() * 11),
+    });
+  }
+  function inOvergrownZone(x, y) {
+    for (const z of zones) {
+      const dx = x - z.cx, dy = y - z.cy;
+      if (dx * dx + dy * dy <= z.radius * z.radius) return true;
+    }
+    return false;
+  }
+  for (const room of rooms) {
+    if (inOvergrownZone(room.cx, room.cy)) {
+      const roll = rng();
+      let floorChance, wallChance;
+      if (roll < 0.40) { floorChance = 0.45 + rng() * 0.20; wallChance = 0.40 + rng() * 0.20; }
+      else { floorChance = 0.10 + rng() * 0.20; wallChance = 0.10 + rng() * 0.15; }
+      for (let ry = room.y; ry < room.y + room.h; ry++) {
+        for (let rx = room.x; rx < room.x + room.w; rx++) {
+          if (get(rx, ry) === TILE.FLOOR && rng() < floorChance) set(rx, ry, TILE.GRASS);
+        }
+      }
+      for (let ry = room.y - 1; ry <= room.y + room.h; ry++) {
+        for (let rx = room.x - 1; rx <= room.x + room.w; rx++) {
+          if (get(rx, ry) === TILE.WALL && rng() < wallChance) set(rx, ry, TILE.WALL_MOSSY);
+        }
+      }
+    }
+  }
+  // Corridor overgrown
+  for (let y = 0; y < layerHeight; y++) {
+    for (let x = 0; x < layerWidth; x++) {
+      if (!inOvergrownZone(x, y)) continue;
+      let inRoom = false;
+      for (const r of rooms) {
+        if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) { inRoom = true; break; }
+      }
+      if (inRoom) continue;
+      const t = get(x, y);
+      if (t === TILE.FLOOR && rng() < 0.4) set(x, y, TILE.GRASS);
+      else if (t === TILE.WALL && rng() < 0.3) set(x, y, TILE.WALL_MOSSY);
+    }
+  }
+  // Stone floor variation: 10% of rooms
+  for (const room of rooms) {
+    if (rng() < 0.10) {
+      for (let ry = room.y; ry < room.y + room.h; ry++) {
+        for (let rx = room.x; rx < room.x + room.w; rx++) {
+          if (get(rx, ry) === TILE.FLOOR) set(rx, ry, TILE.STONE);
+        }
+      }
+    }
+  }
+
   const doors = [];
 
   // Furniture overlay
   const overlay = new Map();
   for (const room of rooms) {
     furnishRoom(room, map, layerWidth, layerHeight, overlay);
+  }
+
+  // Corridor decoration (torches, pillar pairs)
+  decorateCorridors(map, layerWidth, layerHeight, rooms, overlay);
+
+  // Dead-end loot
+  for (const de of deadEnds) {
+    if (rng() < 0.6) {
+      const oKey = overlayKey(de.x, de.y);
+      if (!overlay.has(oKey) && (get(de.x, de.y) === TILE.FLOOR || get(de.x, de.y) === TILE.GRASS)) {
+        const loot = rng() < 0.4
+          ? { char: '▣', color: '#DAA520', passable: false }
+          : { char: '◎', color: '#8B4513', passable: false };
+        overlay.set(oKey, loot);
+      }
+    }
   }
 
   const overlayArray = [];
@@ -640,39 +1217,3 @@ function packCoord(x, y) {
   return (x + 10000) * 100000 + (y + 10000);
 }
 
-/** Carve a 2-wide L-shaped corridor using seeded RNG */
-function carveSeededCorridor(x1, y1, x2, y2, set, rng, mapW, mapH) {
-  const horizontalFirst = rng() > 0.5;
-
-  const carveH = (fromX, toX, y) => {
-    const sx = Math.min(fromX, toX);
-    const ex = Math.max(fromX, toX);
-    for (let x = sx; x <= ex; x++) {
-      for (let dy = 0; dy <= 1; dy++) {
-        if (x >= 1 && x < mapW - 1 && y + dy >= 1 && y + dy < mapH - 1) {
-          set(x, y + dy, TILE.FLOOR);
-        }
-      }
-    }
-  };
-
-  const carveV = (fromY, toY, x) => {
-    const sy = Math.min(fromY, toY);
-    const ey = Math.max(fromY, toY);
-    for (let y = sy; y <= ey; y++) {
-      for (let dx = 0; dx <= 1; dx++) {
-        if (x + dx >= 1 && x + dx < mapW - 1 && y >= 1 && y < mapH - 1) {
-          set(x + dx, y, TILE.FLOOR);
-        }
-      }
-    }
-  };
-
-  if (horizontalFirst) {
-    carveH(x1, x2, y1);
-    carveV(y1, y2, x2);
-  } else {
-    carveV(y1, y2, x1);
-    carveH(x1, x2, y2);
-  }
-}
