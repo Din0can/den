@@ -53,6 +53,15 @@ export function getMaxHp(stats) {
   return total;
 }
 
+export function getSpeedMultiplier(stats) {
+  const cur = getCurrentHp(stats);
+  const max = getMaxHp(stats);
+  const healthPct = max > 0 ? cur / max : 0;
+  const healthFactor = healthPct >= 0.9 ? 1.0 : healthPct / 0.9;
+  const bleedFactor = Math.max(0, 1 - stats.bleedStacks * 0.1);
+  return Math.max(0.1, healthFactor * bleedFactor);
+}
+
 export function applyDamageToLimb(stats, limbId, amount) {
   const limb = stats.limbs.find(l => l.id === limbId);
   if (!limb) return { damage: 0, severed: false, killed: false };

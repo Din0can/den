@@ -71,10 +71,6 @@ export function sendEnterExit() {
   socket.emit('enterExit');
 }
 
-export function sendHurt(limbId, amount, type) {
-  if (!socket) return;
-  socket.emit('hurt', { limbId, amount, type });
-}
 
 export function getId() {
   return socket?.id;

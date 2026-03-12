@@ -1,10 +1,11 @@
 import { MOVE_COOLDOWN, COLORS, FOV_RADIUS, FOV_GRACE_RADIUS, TILE } from './config.js';
+import { getSpeedMultiplier } from './stats.js';
 import { CHUNK_VIEW_DIST, chunkKey, worldToChunk } from './chunk.js';
 import { init as initCRT, resize as resizeCRT, resizeTexture } from './crt-renderer.js';
 import { GameMap } from './game-map.js';
 import { Entity } from './entity.js';
 import { Camera } from './camera.js';
-import { initInput, getMovementDir, consumeInteract, consumeHurt } from './input.js';
+import { initInput, getMovementDir, consumeInteract } from './input.js';
 import { initRenderer, render } from './game-renderer.js';
 import { initHudRenderer, resizeHud, renderHud } from './hud-renderer.js';
 import { hudInfo, updateHUD } from './hud.js';
@@ -198,9 +199,10 @@ function init() {
 function gameLoop(now) {
   if (!localEntity) return;
 
-  // Movement with cooldown
+  // Movement with cooldown (slowed by low health and bleed)
   const dir = getMovementDir();
-  if (dir && now - lastMoveTime >= MOVE_COOLDOWN) {
+  const moveCooldown = localStats ? MOVE_COOLDOWN / getSpeedMultiplier(localStats) : MOVE_COOLDOWN;
+  if (dir && now - lastMoveTime >= moveCooldown) {
     const newFacing = dirToFacing(dir.dx, dir.dy);
     const facingChanged = localEntity.facing !== newFacing;
     localEntity.facing = newFacing;
@@ -222,14 +224,6 @@ function gameLoop(now) {
   // Detect ENTRY tile under player
   onEntryTile = gameMap.getTile(localEntity.x, localEntity.y) === TILE.ENTRY;
 
-  // Debug hurt (H key) — damage a random non-severed limb
-  if (consumeHurt() && localStats) {
-    const alive = localStats.limbs.filter(l => l.hp > 0);
-    if (alive.length > 0) {
-      const limb = alive[Math.floor(Math.random() * alive.length)];
-      network.sendHurt(limb.id, 5, 'flat');
-    }
-  }
 
   // Interact (E key) — ENTRY takes priority over doors
   if (consumeInteract()) {

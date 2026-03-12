@@ -472,27 +472,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // --- Debug hurt command ---
-  socket.on('hurt', (data) => {
-    const p = players.get(id);
-    if (!p || !p.stats) return;
-    const { limbId, amount, type } = data;
-    if (!limbId || !amount) return;
-
-    const playerLayerId = layerManager.getPlayerLayerId(id);
-    const blood = getLayerBlood(playerLayerId);
-    const result = applyFlatDamage(p.stats, limbId, amount);
-
-    // Splatter blood at player position
-    const severity = amount >= 10 ? 2 : 1;
-    const splatResult = bloodSplatter(blood, p.x, p.y, severity);
-
-    // Send damage to the hurt player
-    socket.emit('damage', { limbId, amount: result.damage, stats: p.stats });
-
-    // Send blood update to entire layer
-    io.to(`layer:${playerLayerId}`).emit('bloodUpdate', { updates: [splatResult] });
-  });
 
   // --- Shared transition logic ---
   function executeTransition(targetLayerId) {
