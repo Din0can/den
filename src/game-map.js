@@ -15,6 +15,8 @@ export class GameMap {
     this.torchOverlay = new Map();  // packed coord -> overlay entry (char === '¥')
     this.infoPoints = new Map();    // packed coord -> info object
     this._allInfos = [];            // flat list
+    this.shops = new Map();         // packed coord -> shop object
+    this._allShops = [];            // flat list
     this.blood = new Map();         // packed coord -> bitmask (quadrants)
   }
 
@@ -37,6 +39,8 @@ export class GameMap {
     this._allDoors = [];
     this.infoPoints = new Map();
     this._allInfos = [];
+    this.shops = new Map();
+    this._allShops = [];
     this.blood = new Map();
   }
 
@@ -50,6 +54,8 @@ export class GameMap {
     this._allDoors = [];
     this.infoPoints = new Map();
     this._allInfos = [];
+    this.shops = new Map();
+    this._allShops = [];
     this.blood = new Map();
 
     // Convert flat array to chunks
@@ -92,6 +98,11 @@ export class GameMap {
       if (chunk.infoPoints) {
         for (const info of chunk.infoPoints) {
           this._registerInfo(info);
+        }
+      }
+      if (chunk.shops) {
+        for (const shop of chunk.shops) {
+          this._registerShop(shop);
         }
       }
     }
@@ -156,6 +167,7 @@ export class GameMap {
     if (!meta || !meta.passable) return false;
     const ov = this.getOverlay(x, y);
     if (ov && !ov.passable) return false;
+    if (this.getShopAt(x, y)) return false;
     return true;
   }
 
@@ -348,6 +360,38 @@ export class GameMap {
     if (!info) return;
     this.infoPoints.delete(this._infoKey(info.x, info.y));
     this._allInfos = this._allInfos.filter(i => i.id !== infoId);
+  }
+
+  // --- Shops ---
+  _shopKey(x, y) {
+    return (x << 16) | (y & 0xFFFF);
+  }
+
+  _registerShop(shop) {
+    if (this._allShops.find(s => s.id === shop.id)) return;
+    this._allShops.push(shop);
+    this.shops.set(this._shopKey(shop.x, shop.y), shop);
+  }
+
+  getShopAt(x, y) {
+    return this.shops.get(this._shopKey(x, y)) || null;
+  }
+
+  getShopNear(px, py, dist = 1) {
+    const result = [];
+    for (const shop of this._allShops) {
+      if (Math.abs(shop.x - px) + Math.abs(shop.y - py) <= dist) {
+        result.push(shop);
+      }
+    }
+    return result;
+  }
+
+  removeShop(shopId) {
+    const shop = this._allShops.find(s => s.id === shopId);
+    if (!shop) return;
+    this.shops.delete(this._shopKey(shop.x, shop.y));
+    this._allShops = this._allShops.filter(s => s.id !== shopId);
   }
 
   // --- Blood ---

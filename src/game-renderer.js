@@ -89,7 +89,7 @@ function drawDoor(px, py, door) {
   }
 }
 
-export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos) {
+export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos, showLootPrompt, containerFloatMsg, showShopPrompt) {
   const entityArray = Array.from(entities);
   const viewRows = viewport.rows;
 
@@ -180,6 +180,27 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
     }
   }
 
+  // Draw shopkeepers
+  for (const shop of gameMap._allShops) {
+    const vis = gameMap.isVisible(shop.x, shop.y);
+    if (!vis) continue;
+    const sx = (shop.x - camera.x) * TILE_SIZE;
+    const sy = (shop.y - camera.y) * TILE_SIZE;
+    if (sx < -TILE_SIZE || sx >= viewport.gameWidth || sy < -TILE_SIZE || sy >= viewRows * TILE_SIZE) continue;
+
+    ctx.font = FONT;
+    drawRotatedChar('@', sx, sy, '#ccaa00', 'south');
+
+    // Name label above
+    if (shop.name) {
+      ctx.font = NAME_FONT;
+      ctx.fillStyle = '#ccaa00';
+      const tw = ctx.measureText(shop.name).width;
+      ctx.fillText(shop.name, sx + TILE_SIZE / 2 - tw / 2, sy - 12);
+      ctx.font = FONT;
+    }
+  }
+
   // Draw local player (always visible)
   if (localEntity) {
     const sx = (localEntity.x - camera.x) * TILE_SIZE;
@@ -262,6 +283,38 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
     ctx.font = FONT;
   }
 
+  // "Loot (E)" floating prompt when facing a container
+  if (showLootPrompt && localEntity) {
+    const sx = (localEntity.x - camera.x) * TILE_SIZE;
+    const sy = (localEntity.y - camera.y) * TILE_SIZE;
+    const label = 'Loot (E)';
+    ctx.font = NAME_FONT;
+    const tw = ctx.measureText(label).width;
+    const px = sx + TILE_SIZE / 2 - tw / 2;
+    const py = sy - 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(px - 4, py - 2, tw + 8, 14);
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText(label, px, py);
+    ctx.font = FONT;
+  }
+
+  // "Shop (E)" floating prompt when facing a shop
+  if (showShopPrompt && localEntity) {
+    const sx = (localEntity.x - camera.x) * TILE_SIZE;
+    const sy = (localEntity.y - camera.y) * TILE_SIZE;
+    const label = 'Shop (E)';
+    ctx.font = NAME_FONT;
+    const tw = ctx.measureText(label).width;
+    const px = sx + TILE_SIZE / 2 - tw / 2;
+    const py = sy - 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(px - 4, py - 2, tw + 8, 14);
+    ctx.fillStyle = '#ccaa00';
+    ctx.fillText(label, px, py);
+    ctx.font = FONT;
+  }
+
   // Info point hologram text
   if (nearbyInfos && nearbyInfos.length > 0) {
     ctx.font = NAME_FONT;
@@ -284,4 +337,21 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
     }
     ctx.font = FONT;
   }
+
+  // Container result floating message (above player, timed)
+  if (containerFloatMsg && localEntity) {
+    const sx = (localEntity.x - camera.x) * TILE_SIZE;
+    const sy = (localEntity.y - camera.y) * TILE_SIZE;
+    ctx.font = NAME_FONT;
+    ctx.textBaseline = 'top';
+    const tw = ctx.measureText(containerFloatMsg).width;
+    const px = sx + TILE_SIZE / 2 - tw / 2;
+    const py = sy - 28;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(px - 5, py - 2, tw + 10, 14);
+    ctx.fillStyle = '#ddcc88';
+    ctx.fillText(containerFloatMsg, px, py);
+    ctx.font = FONT;
+  }
+
 }

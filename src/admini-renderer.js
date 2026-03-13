@@ -90,7 +90,7 @@ function adminiRenderGrid(cameraX, cameraY, zoom, cols, rows) {
 /** Draw brush cursor preview */
 function adminiRenderCursor(editState, cameraX, cameraY) {
   const { mouseWorldX, mouseWorldY, brushSize, currentTool, doorOrientation } = editState;
-  if (mouseWorldX < 0 || mouseWorldY < 0) return;
+  if (mouseWorldX == null || mouseWorldY == null) return;
 
   const isDoorTool = currentTool === 'door-wood' || currentTool === 'door-metal';
   const half = Math.floor(brushSize / 2);
@@ -136,9 +136,15 @@ function adminiRenderCursor(editState, cameraX, cameraY) {
     ctx.strokeStyle = currentTool === 'fill' ? 'rgba(100,200,255,0.5)' :
                       currentTool === 'entry-down' ? 'rgba(0,255,255,0.5)' :
                       currentTool === 'info' ? 'rgba(0,204,204,0.6)' :
+                      currentTool === 'shop' ? 'rgba(204,170,0,0.6)' :
                       'rgba(255,165,0,0.5)';
     ctx.lineWidth = 1;
     ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
+
+    if (currentTool === 'shop') {
+      ctx.fillStyle = 'rgba(204,170,0,0.6)';
+      ctx.fillText('@', px + 2, py + 1);
+    }
   }
 }
 
@@ -202,6 +208,42 @@ function adminiRenderInfoLabels(gameMap, cameraX, cameraY, cols, rows) {
   ctx.font = FONT;
 }
 
+/** Draw shop markers and name labels */
+function adminiRenderShops(gameMap, cameraX, cameraY, cols, rows, editState) {
+  if (!gameMap._allShops || gameMap._allShops.length === 0) {
+    return;
+  }
+
+  ctx.font = FONT;
+  ctx.textBaseline = 'top';
+
+  for (const shop of gameMap._allShops) {
+    const sx = shop.x - cameraX;
+    const sy = shop.y - cameraY;
+    if (sx < -5 || sx > cols + 5 || sy < -5 || sy > rows + 5) continue;
+
+    const px = sx * TILE_SIZE;
+    const py = sy * TILE_SIZE;
+
+    // Gold @ character
+    ctx.fillStyle = '#ccaa00';
+    ctx.fillText('@', px + 2, py + 1);
+
+    // Name label above
+    ctx.font = SMALL_FONT;
+    const tw = ctx.measureText(shop.name).width;
+    const lx = px + TILE_SIZE / 2 - tw / 2;
+    const ly = py - FONT_SIZE * 0.55;
+
+    ctx.fillStyle = 'rgba(20,16,0,0.7)';
+    ctx.fillRect(lx - 3, ly - 1, tw + 6, FONT_SIZE * 0.55 + 2);
+    ctx.fillStyle = '#ccaa00';
+    ctx.fillText(shop.name, lx, ly);
+
+    ctx.font = FONT;
+  }
+}
+
 /** Standard render: static layers or player composited view + player markers */
 export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, editState = null) {
   const w = ctx.canvas.width;
@@ -255,6 +297,12 @@ export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, ed
         ctx.fillStyle = meta.fg;
         ctx.fillText(meta.char, px + 2, py + 1);
       }
+
+      // Subtle highlight for tiles matching the selected palette tile
+      if (editState && editState.selectedTile != null && tile === editState.selectedTile) {
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+      }
     }
   }
 
@@ -263,6 +311,9 @@ export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, ed
 
   // Draw info point labels (always in edit mode, or when viewing statics)
   adminiRenderInfoLabels(gameMap, cameraX, cameraY, cols, rows);
+
+  // Draw shops
+  adminiRenderShops(gameMap, cameraX, cameraY, cols, rows, editState);
 
   // Edit mode overlays
   if (editState) {

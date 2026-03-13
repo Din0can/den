@@ -30,6 +30,7 @@ export function createPlayerStats(maxHp = 100) {
     sanity: 100,
     maxSanity: 100,
     bleedStacks: 0,
+    gold: 0,
   };
 }
 
@@ -72,9 +73,10 @@ export function applyDamageToLimb(stats, limbId, amount) {
   return { damage: actual, severed, killed };
 }
 
-export function applyFlatDamage(stats, limbId, amount) {
-  const result = applyDamageToLimb(stats, limbId, amount);
-  stats.bleedStacks += Math.floor(amount / 5);
+export function applyFlatDamage(stats, limbId, amount, armor = 0) {
+  const reduced = Math.max(1, amount - armor);
+  const result = applyDamageToLimb(stats, limbId, reduced);
+  stats.bleedStacks += Math.floor(reduced / 5);
   return { ...result, bleedStacks: stats.bleedStacks };
 }
 

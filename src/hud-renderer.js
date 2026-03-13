@@ -1,3 +1,5 @@
+import { renderHotbar, renderEquipment, renderEquipAnim, HOTBAR_TOTAL_W } from './hotbar-renderer.js';
+
 let ctx;
 let canvas;
 const FONT_SIZE = 14;
@@ -93,11 +95,39 @@ export function renderHud(info) {
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, w, h);
 
+  // Render equipment slots (above hotbar) — gold selection in shop mode
+  const shopMode = !!(info.shopState && info.shopState.shopMode);
+  const browsingShop = shopMode && info.shopState.shopBrowsing === 'shop';
+  renderEquipment(ctx, info.hotbar, w, h, shopMode, browsingShop);
+  // Render hotbar (centered)
+  renderHotbar(ctx, info.hotbar, w, h, shopMode, browsingShop);
+  // Render equip animation
+  renderEquipAnim(ctx, info.hotbar);
+
+  // Equip/Use hint between equipment row and hotbar
+  if (info.equipHint && !(info.shopState && info.shopState.shopMode)) {
+    const SLOT_SIZE = 36;
+    const hotbarStartY = (h - SLOT_SIZE) / 2;
+    ctx.font = `10px ${FONT}`;
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'center';
+    const tw = ctx.measureText(info.equipHint).width;
+    const hintY = hotbarStartY - 8;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(w / 2 - tw / 2 - 4, hintY - 2, tw + 8, 13);
+    ctx.fillStyle = '#cccccc';
+    ctx.fillText(info.equipHint, w / 2, hintY);
+    ctx.textAlign = 'left';
+  }
+
   ctx.font = `${FONT_SIZE}px ${FONT}`;
   ctx.textBaseline = 'middle';
 
   const pad = 16;
   const y = h / 2;
+
+  // Hotbar left edge for overlap guard
+  const hotbarLeft = (w - HOTBAR_TOTAL_W) / 2;
 
   // Player name + coords
   const name = info.name || 'unknown';
@@ -106,12 +136,17 @@ export function renderHud(info) {
   ctx.fillStyle = '#888888';
   ctx.fillText(nameText, pad, y);
 
-  // Connected count + layer — muted
+  // Connected count + layer — muted (only if it fits before hotbar)
   const nameWidth = ctx.measureText(nameText).width;
   const count = info.playerCount || 1;
   const layer = info.layer !== undefined ? info.layer : 0;
-  ctx.fillStyle = '#444444';
-  ctx.fillText(`Connected: ${count}   L${layer}`, pad + nameWidth + 24, y);
+  const connectedText = `Connected: ${count}   L${layer}`;
+  const connectedX = pad + nameWidth + 24;
+  const connectedRight = connectedX + ctx.measureText(connectedText).width;
+  if (connectedRight < hotbarLeft - 8) {
+    ctx.fillStyle = '#444444';
+    ctx.fillText(connectedText, connectedX, y);
+  }
 
   // Right side: horizontal stats + ASCII figure
   if (info.limbs && info.limbs.length > 0) {
@@ -155,5 +190,13 @@ export function renderHud(info) {
     else if (hpRatio > 0.25) ctx.fillStyle = '#cc6600';
     else ctx.fillStyle = '#cc0000';
     ctx.fillText(hpText, cursor, y);
+    cursor -= 12;
+
+    // GOLD
+    const goldText = `GOLD ${info.gold || 0}`;
+    const goldW = ctx.measureText(goldText).width;
+    cursor -= goldW;
+    ctx.fillStyle = '#ccaa00';
+    ctx.fillText(goldText, cursor, y);
   }
 }

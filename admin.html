@@ -357,12 +357,531 @@
       flex: 1;
       image-rendering: pixelated;
     }
+    /* Items panel */
+    #sidebar-items {
+      display: none;
+      color: #ccc;
+    }
+    #sidebar-items h2 {
+      font-size: 13px;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+    #btn-items {
+      display: block;
+      width: 100%;
+      padding: 6px;
+      margin-bottom: 8px;
+      background: #1a1a2a;
+      color: #88a;
+      border: 1px solid #3a3a5a;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    #btn-items:hover {
+      background: #2a2a3a;
+      color: #aac;
+    }
+    #btn-items-back {
+      display: block;
+      width: 100%;
+      padding: 6px;
+      margin-bottom: 8px;
+      background: #222;
+      color: #aaa;
+      border: 1px solid #444;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    #btn-items-back:hover {
+      background: #333;
+      color: #fff;
+    }
+    #btn-new-item {
+      display: block;
+      width: 100%;
+      padding: 6px;
+      margin-bottom: 8px;
+      background: #1a2a1a;
+      color: #6a6;
+      border: 1px solid #3a5a3a;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    #btn-new-item:hover {
+      background: #2a3a2a;
+      color: #8c8;
+    }
+    #item-list {
+      list-style: none;
+      padding: 0;
+      margin-bottom: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    #item-list li {
+      padding: 5px 8px;
+      cursor: pointer;
+      border-radius: 3px;
+      font-size: 12px;
+      margin-bottom: 2px;
+      color: #aaa;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #item-list li:hover {
+      background: #222;
+      color: #fff;
+    }
+    #item-list li.active {
+      background: #2a2a3a;
+      color: #fff;
+      border-left: 3px solid #6a6aff;
+      padding-left: 5px;
+    }
+    .item-char {
+      font-family: 'Kraken-Primary', 'JetBrains Mono', monospace;
+      font-size: 14px;
+      width: 18px;
+      text-align: center;
+    }
+    .rarity-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    #item-form {
+      padding: 8px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+    #item-form label {
+      display: block;
+      color: #888;
+      margin-bottom: 2px;
+      margin-top: 6px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    #item-form label:first-child {
+      margin-top: 0;
+    }
+    #item-form input, #item-form select, #item-form textarea {
+      width: 100%;
+      padding: 3px 5px;
+      background: #222;
+      color: #ccc;
+      border: 1px solid #444;
+      border-radius: 2px;
+      font-family: inherit;
+      font-size: 11px;
+    }
+    #item-form textarea {
+      resize: vertical;
+      min-height: 32px;
+    }
+    #item-form .form-row {
+      display: flex;
+      gap: 6px;
+    }
+    #item-form .form-row > div {
+      flex: 1;
+    }
+    #item-form .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    #item-form .checkbox-row input {
+      width: auto;
+    }
+    #btn-save-item {
+      display: block;
+      width: 100%;
+      padding: 5px;
+      margin-top: 8px;
+      background: #2a3a2a;
+      color: #8c8;
+      border: 1px solid #3a5a3a;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+    }
+    #btn-save-item:hover {
+      background: #3a4a3a;
+    }
+    #btn-delete-item {
+      display: block;
+      width: 100%;
+      padding: 5px;
+      margin-top: 4px;
+      background: #2a1a1a;
+      color: #a66;
+      border: 1px solid #5a3a3a;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+    }
+    #btn-delete-item:hover {
+      background: #3a2a2a;
+      color: #c88;
+    }
+    /* Container config section */
+    #container-config {
+      margin-top: 12px;
+      padding: 8px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 3px;
+    }
+    #container-config h3 {
+      font-size: 10px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
+    .container-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+    .container-char {
+      font-family: 'Kraken-Primary', 'JetBrains Mono', monospace;
+      font-size: 14px;
+      width: 16px;
+      text-align: center;
+    }
+    .container-name {
+      flex: 1;
+      color: #aaa;
+    }
+    .container-row input {
+      width: 42px;
+      padding: 2px 4px;
+      background: #222;
+      color: #ccc;
+      border: 1px solid #444;
+      border-radius: 2px;
+      font-family: inherit;
+      font-size: 11px;
+      text-align: right;
+    }
+    .container-pct {
+      color: #666;
+      font-size: 10px;
+    }
+    #btn-save-containers {
+      display: block;
+      width: 100%;
+      padding: 4px;
+      margin-top: 6px;
+      background: #2a3a2a;
+      color: #8c8;
+      border: 1px solid #3a5a3a;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 10px;
+    }
+    #btn-save-containers:hover {
+      background: #3a4a3a;
+    }
+    /* Rarity weights editor */
+    #rarity-weights {
+      margin-top: 12px;
+      padding: 8px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 3px;
+    }
+    #rarity-weights h3 {
+      font-size: 10px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
+    .rw-bracket {
+      padding: 6px;
+      margin-bottom: 6px;
+      background: #151518;
+      border: 1px solid #333;
+      border-radius: 3px;
+    }
+    .rw-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+      font-size: 10px;
+      color: #aaa;
+    }
+    .rw-header .rw-label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .rw-bracket input[type="number"]::-webkit-inner-spin-button,
+    .rw-bracket input[type="number"]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+    .rw-bracket input[type="number"] {
+      -moz-appearance: textfield;
+    }
+    .rw-header input {
+      width: 44px;
+      padding: 1px 3px;
+      background: #222;
+      color: #ccc;
+      border: 1px solid #444;
+      border-radius: 2px;
+      font-family: inherit;
+      font-size: 10px;
+      text-align: center;
+    }
+    .rw-remove {
+      background: #2a1a1a;
+      color: #a66;
+      border: 1px solid #5a3a3a;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 9px;
+      padding: 1px 5px;
+    }
+    .rw-remove:hover { background: #3a2a2a; color: #c88; }
+    .rw-remove:disabled { opacity: 0.3; cursor: default; }
+    .rw-weights {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      font-size: 10px;
+    }
+    .rw-w {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .rw-w label {
+      color: #666;
+      font-size: 9px;
+      min-width: 22px;
+    }
+    .rw-w input {
+      width: 40px;
+      padding: 1px 3px;
+      background: #222;
+      color: #ccc;
+      border: 1px solid #444;
+      border-radius: 2px;
+      font-family: inherit;
+      font-size: 10px;
+      text-align: right;
+    }
+    #btn-add-bracket {
+      display: block;
+      width: 100%;
+      padding: 4px;
+      margin-top: 4px;
+      background: #1a1a2a;
+      color: #88a;
+      border: 1px solid #3a3a5a;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 10px;
+    }
+    #btn-add-bracket:hover { background: #2a2a3a; color: #aac; }
+    #btn-save-rarity {
+      display: block;
+      width: 100%;
+      padding: 4px;
+      margin-top: 4px;
+      background: #2a3a2a;
+      color: #8c8;
+      border: 1px solid #3a5a3a;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 10px;
+    }
+    #btn-save-rarity:hover { background: #3a4a3a; }
+    @keyframes flash-save {
+      0% { background: #2a4a2a; }
+      100% { background: transparent; }
+    }
+    #item-list li.flash-save {
+      animation: flash-save 0.6s ease-out;
+    }
+    /* Sprite picker */
+    .sprite-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .sprite-preview {
+      width: 36px;
+      height: 36px;
+      background: #111;
+      border: 2px solid #444;
+      border-radius: 2px;
+      cursor: pointer;
+      image-rendering: pixelated;
+    }
+    .sprite-preview:hover {
+      border-color: #888;
+    }
+    .sprite-preview.has-sprite {
+      border-color: #6a6aff;
+    }
+    #btn-clear-sprite {
+      padding: 2px 6px;
+      background: #2a1a1a;
+      color: #a66;
+      border: 1px solid #5a3a3a;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 9px;
+    }
+    #btn-clear-sprite:hover {
+      background: #3a2a2a;
+      color: #c88;
+    }
+    .sprite-picker {
+      max-height: 200px;
+      overflow-y: auto;
+      margin-top: 4px;
+      padding: 4px;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 2px;
+    }
+    .sprite-category {
+      font-size: 9px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin: 4px 0 2px;
+    }
+    .sprite-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      margin-bottom: 2px;
+    }
+    .sprite-swatch {
+      width: 28px;
+      height: 28px;
+      background: #111;
+      border: 2px solid #333;
+      border-radius: 2px;
+      cursor: pointer;
+      image-rendering: pixelated;
+      padding: 0;
+    }
+    .sprite-swatch:hover {
+      border-color: #888;
+    }
+    .sprite-swatch.active {
+      border-color: #fff;
+      background: #222;
+    }
+    .sprite-swatch canvas {
+      display: block;
+      image-rendering: pixelated;
+    }
+    #item-effects-list { margin-bottom: 4px; }
+    .effect-row {
+      display: flex; flex-direction: column; gap: 3px;
+      margin-bottom: 6px; padding: 5px;
+      background: #151518; border: 1px solid #333; border-radius: 3px;
+    }
+    .effect-row-top {
+      display: flex; align-items: center; gap: 4px;
+    }
+    .effect-row-top select {
+      flex: 1; padding: 3px 5px; background: #222; color: #ccc;
+      border: 1px solid #444; border-radius: 2px;
+      font-family: inherit; font-size: 11px;
+    }
+    .effect-row-top button {
+      background: #2a1a1a; color: #a66; border: 1px solid #5a3a3a;
+      border-radius: 2px; cursor: pointer; font-family: inherit;
+      font-size: 10px; padding: 2px 6px;
+    }
+    .effect-row-bottom {
+      display: flex; align-items: center; gap: 4px;
+    }
+    .effect-row-bottom label {
+      font-size: 9px; color: #666; margin: 0; display: inline;
+      text-transform: none; letter-spacing: 0;
+    }
+    .effect-row-bottom input {
+      width: 60px; padding: 3px 5px; background: #222; color: #ccc;
+      border: 1px solid #444; border-radius: 2px;
+      font-family: inherit; font-size: 11px;
+    }
+    #btn-add-effect {
+      width: 100%; padding: 3px; margin-bottom: 2px;
+      background: #1a1a1a; color: #888; border: 1px solid #333;
+      border-radius: 2px; cursor: pointer; font-family: inherit; font-size: 10px;
+    }
+    #btn-add-effect:hover { background: #222; color: #aaa; }
+    .shop-inv-row {
+      margin-bottom: 6px; padding: 4px; background: #151510;
+      border: 1px solid #333; border-radius: 2px;
+    }
+    .shop-inv-top {
+      display: flex; align-items: center; gap: 3px; margin-bottom: 3px;
+    }
+    .shop-inv-top select {
+      flex: 1; padding: 2px 4px; background: #222; color: #ccc;
+      border: 1px solid #444; border-radius: 2px;
+      font-family: inherit; font-size: 10px;
+    }
+    .shop-inv-top button {
+      background: #2a1a1a; color: #a66; border: 1px solid #5a3a3a;
+      border-radius: 2px; cursor: pointer; font-family: inherit;
+      font-size: 10px; padding: 1px 5px;
+    }
+    .shop-inv-bottom {
+      display: flex; align-items: center; gap: 4px;
+    }
+    .shop-inv-bottom label {
+      font-size: 9px; color: #666; margin: 0; display: inline;
+    }
+    .shop-inv-bottom input {
+      width: 36px; padding: 2px 3px; background: #222; color: #ccc;
+      border: 1px solid #444; border-radius: 2px;
+      font-family: inherit; font-size: 10px;
+    }
   </style>
 </head>
 <body>
   <div id="sidebar">
     <div id="sidebar-layers">
       <h2>Layers</h2>
+      <button id="btn-items">Items</button>
       <button id="btn-new-layer">+ New Layer</button>
       <div id="new-layer-form" style="display:none">
         <input id="new-layer-id" type="number" placeholder="Layer ID" min="0">
@@ -373,6 +892,127 @@
       </div>
       <ul id="layer-list"></ul>
       <div id="layer-info"></div>
+    </div>
+    <div id="sidebar-items">
+      <h2>Items</h2>
+      <button id="btn-items-back">Back to Layers</button>
+      <button id="btn-new-item">+ New Item</button>
+      <ul id="item-list"></ul>
+      <div id="item-form" style="display:none">
+        <label>ID</label>
+        <input id="item-id" type="text" placeholder="snake_case_id">
+        <div class="form-row">
+          <div>
+            <label>Name</label>
+            <input id="item-name" type="text" placeholder="Display Name">
+          </div>
+          <div>
+            <label>Char</label>
+            <input id="item-char" type="text" maxlength="2" placeholder="/" style="width:40px">
+          </div>
+        </div>
+        <label>Sprite</label>
+        <div class="sprite-row">
+          <canvas id="sprite-preview" class="sprite-preview" width="36" height="36" title="Click to pick sprite"></canvas>
+          <span id="sprite-name-label" style="font-size:10px;color:#666">none</span>
+          <button id="btn-clear-sprite" type="button">Clear</button>
+        </div>
+        <div id="sprite-picker" class="sprite-picker" style="display:none"></div>
+        <div class="form-row">
+          <div>
+            <label>Type</label>
+            <select id="item-type">
+              <option value="weapon">weapon</option>
+              <option value="armor">armor</option>
+              <option value="consumable">consumable</option>
+              <option value="material">material</option>
+              <option value="special">special</option>
+            </select>
+          </div>
+          <div>
+            <label>Slot</label>
+            <select id="item-slot">
+              <option value="">none</option>
+              <option value="head">head</option>
+              <option value="chest">chest</option>
+              <option value="legs">legs</option>
+              <option value="mainHand">mainHand</option>
+              <option value="offHand">offHand</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Rarity</label>
+            <select id="item-rarity">
+              <option value="common">common</option>
+              <option value="uncommon">uncommon</option>
+              <option value="rare">rare</option>
+              <option value="epic">epic</option>
+              <option value="legendary">legendary</option>
+            </select>
+          </div>
+          <div>
+            <label>Min Layer</label>
+            <input id="item-min-layer" type="number" value="0" min="0">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>Armor</label>
+            <input id="item-armor" type="number" value="0" min="0">
+          </div>
+          <div>
+            <label>Damage</label>
+            <input id="item-damage" type="number" value="0" min="0">
+          </div>
+          <div>
+            <label>Max Stack</label>
+            <input id="item-max-stack" type="number" value="1" min="1">
+          </div>
+        </div>
+        <div class="checkbox-row">
+          <input id="item-stackable" type="checkbox">
+          <label style="margin:0;display:inline">Stackable</label>
+          <input id="item-two-handed" type="checkbox">
+          <label style="margin:0;display:inline">Two-Handed</label>
+        </div>
+        <label>Effects</label>
+        <div id="item-effects-list"></div>
+        <button id="btn-add-effect" type="button">+ Add Effect</button>
+        <label>Description</label>
+        <textarea id="item-description" placeholder="Item description..."></textarea>
+        <button id="btn-save-item">Save Item</button>
+        <button id="btn-delete-item">Delete Item</button>
+      </div>
+      <div id="container-config">
+        <h3>Containers</h3>
+        <div class="container-row">
+          <span class="container-char" style="color:#c8a24e">&#x25A3;</span>
+          <span class="container-name">Chest</span>
+          <input id="cc-chest" type="number" min="0" max="100" value="90">
+          <span class="container-pct">%</span>
+        </div>
+        <div class="container-row">
+          <span class="container-char" style="color:#8a7a6a">&#x25CE;</span>
+          <span class="container-name">Barrel</span>
+          <input id="cc-barrel" type="number" min="0" max="100" value="40">
+          <span class="container-pct">%</span>
+        </div>
+        <div class="container-row">
+          <span class="container-char" style="color:#7a6a5a">&#x25A4;</span>
+          <span class="container-name">Crate</span>
+          <input id="cc-crate" type="number" min="0" max="100" value="60">
+          <span class="container-pct">%</span>
+        </div>
+        <button id="btn-save-containers">Save Containers</button>
+      </div>
+      <div id="rarity-weights">
+        <h3>Drop Rates</h3>
+        <div id="rw-brackets"></div>
+        <button id="btn-add-bracket">+ Add Bracket</button>
+        <button id="btn-save-rarity">Save Drop Rates</button>
+      </div>
     </div>
     <div id="sidebar-editor" style="display:none">
       <h2 id="editor-title">Editing L0</h2>
@@ -387,6 +1027,7 @@
         <button class="tool-btn" data-tool="door-wood" title="Wood Door" style="color:#8B4513">&#x2503;</button>
         <button class="tool-btn" data-tool="door-metal" title="Metal Door" style="color:#708090">&#x2503;</button>
         <button class="tool-btn" data-tool="info" title="Info Point (I)" style="color:#00cccc">i</button>
+        <button class="tool-btn" data-tool="shop" title="Shop (S)" style="color:#ccaa00">$</button>
       </div>
       <div class="tools-label">Brush</div>
       <div id="editor-brush">
@@ -400,6 +1041,29 @@
       <div id="editor-entries">
         <span class="entry-label">E&#x2193;:</span> <span id="entry-down-pos">not set</span><br>
         <span class="entry-label">E&#x2191;:</span> <span id="entry-up-pos">not set</span>
+      </div>
+      <div id="shop-editor-panel" style="display:none; padding:8px; background:#1a1a0a; border:1px solid #554400; border-radius:3px; margin-bottom:10px;">
+        <div class="tools-label" style="color:#ccaa00">Shop Editor</div>
+        <label style="display:block;color:#888;font-size:10px;margin:4px 0 2px">Name</label>
+        <input id="shop-name" type="text" value="Shopkeeper" style="width:100%;padding:3px 5px;background:#222;color:#ccc;border:1px solid #444;border-radius:2px;font-family:inherit;font-size:11px;">
+        <div style="display:flex;gap:6px">
+          <div style="flex:1">
+            <label style="display:block;color:#888;font-size:10px;margin:4px 0 2px">Buy Markup</label>
+            <input id="shop-buy-markup" type="number" step="0.1" min="0" value="1.0" style="width:100%;padding:3px 5px;background:#222;color:#ccc;border:1px solid #444;border-radius:2px;font-family:inherit;font-size:11px;">
+          </div>
+          <div style="flex:1">
+            <label style="display:block;color:#888;font-size:10px;margin:4px 0 2px">Sell Markup</label>
+            <input id="shop-sell-markup" type="number" step="0.1" min="0" value="0.8" style="width:100%;padding:3px 5px;background:#222;color:#ccc;border:1px solid #444;border-radius:2px;font-family:inherit;font-size:11px;">
+          </div>
+        </div>
+        <label style="display:block;color:#888;font-size:10px;margin:6px 0 2px">Inventory</label>
+        <div id="shop-inv-list"></div>
+        <button id="btn-shop-add-item" style="width:100%;padding:3px;margin-bottom:4px;background:#1a1a1a;color:#888;border:1px solid #333;border-radius:2px;cursor:pointer;font-family:inherit;font-size:10px;">+ Add Item</button>
+        <div style="display:flex;gap:4px">
+          <button id="btn-shop-save" style="flex:1;padding:4px;background:#2a3a1a;color:#8c8;border:1px solid #3a5a3a;border-radius:2px;cursor:pointer;font-family:inherit;font-size:11px;">Save</button>
+          <button id="btn-shop-cancel" style="flex:1;padding:4px;background:#222;color:#aaa;border:1px solid #444;border-radius:2px;cursor:pointer;font-family:inherit;font-size:11px;">Cancel</button>
+        </div>
+        <button id="btn-shop-delete" style="width:100%;padding:4px;margin-top:4px;background:#2a1a1a;color:#a66;border:1px solid #5a3a3a;border-radius:2px;cursor:pointer;font-family:inherit;font-size:11px;">Delete Shop</button>
       </div>
       <button id="btn-save-exit">Save & Exit</button>
       <button id="btn-delete-layer">Delete Layer</button>

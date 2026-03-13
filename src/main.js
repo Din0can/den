@@ -5,13 +5,17 @@ import { init as initCRT, resize as resizeCRT, resizeTexture } from './crt-rende
 import { GameMap } from './game-map.js';
 import { Entity } from './entity.js';
 import { Camera } from './camera.js';
-import { initInput, getMovementDir, consumeInteract } from './input.js';
+import { initInput, initHotbarInput, getMovementDir, consumeInteract, initShopInput, destroyShopInput } from './input.js';
+import { initHotbar, getState as getHotbarState, setAllSlots, setEquipment, setEquipAnim, getEquipAnim, enterShopMode, exitShopMode, updateShopData, getShopState } from './hotbar.js';
+import { getSlotCenter, getEquipSlotCenter, renderShopOverlay, SHOP_CANVAS_H } from './hotbar-renderer.js';
 import { initRenderer, render } from './game-renderer.js';
 import { initHudRenderer, resizeHud, renderHud } from './hud-renderer.js';
 import { hudInfo, updateHUD } from './hud.js';
 import { calculateFOV } from './fov.js';
 import { viewport, recalcViewport } from './viewport.js';
 import { Fog } from './fog.js';
+import { CONTAINER_TILES, CONTAINER_CHARS } from './items.js';
+import { initSpriteCache } from './sprites.js';
 import * as network from './network.js';
 
 // Facing direction -> interaction offset
@@ -45,6 +49,19 @@ let onEntryTile = false;
 let localStats = null;
 let gameCanvas;
 let hudCanvas;
+let shopCanvas;
+let shopCtx;
+
+// Container result message
+let containerMsg = null;
+let containerMsgTime = 0;
+
+// Containers the local player has already opened (cleared on layer change)
+const openedContainers = new Set();
+
+// Cached HUD dimensions (avoid DOM read on every inventory update)
+let cachedHudW = 0;
+let cachedHudH = 0;
 
 // Chunk tracking
 let lastChunkX = -999;
@@ -57,6 +74,18 @@ function handleResize() {
   resizeTexture();
   resizeCRT(window.innerHeight - viewport.hudHeight);
   resizeHud(window.innerWidth, viewport.hudHeight);
+  cachedHudW = window.innerWidth;
+  cachedHudH = viewport.hudHeight;
+  // Resize shop overlay canvas
+  if (shopCanvas) {
+    const dpr = window.devicePixelRatio || 1;
+    shopCanvas.style.bottom = viewport.hudHeight + 'px';
+    shopCanvas.style.width = window.innerWidth + 'px';
+    shopCanvas.width = window.innerWidth * dpr;
+    shopCanvas.height = SHOP_CANVAS_H * dpr;
+    shopCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    shopCtx.imageSmoothingEnabled = false;
+  }
   fovDirty = true;
 }
 
@@ -67,6 +96,7 @@ function debouncedResize() {
 }
 
 function loadLayer(meta, initialChunks) {
+  openedContainers.clear();
   currentLayerId = meta.id;
   gameMap.initBounds(meta.bounds);
   gameMap.loadChunks(initialChunks);
@@ -99,6 +129,22 @@ function checkChunkBoundary() {
   }
 }
 
+function syncInventory(data) {
+  if (data.inventory) setAllSlots(data.inventory);
+  if (data.slots) setAllSlots(data.slots);
+  if (data.equipment) setEquipment(data.equipment);
+}
+
+/** Check if a tile or overlay at a position is a container */
+function isContainerAt(x, y) {
+  const tile = gameMap.getTile(x, y);
+  if (CONTAINER_TILES[tile]) return true;
+  // Check overlay chars
+  const overlay = gameMap.getOverlay(x, y);
+  if (overlay && CONTAINER_CHARS[overlay.char]) return true;
+  return false;
+}
+
 function init() {
   gameCanvas = document.getElementById('game-canvas');
   hudCanvas = document.getElementById('hud-canvas');
@@ -108,7 +154,24 @@ function init() {
   initRenderer(gameCanvas);
   initHudRenderer(hudCanvas);
   resizeHud(window.innerWidth, viewport.hudHeight);
+  cachedHudW = window.innerWidth;
+  cachedHudH = viewport.hudHeight;
+  // Create shop overlay canvas
+  const dpr = window.devicePixelRatio || 1;
+  shopCanvas = document.createElement('canvas');
+  shopCanvas.id = 'shop-canvas';
+  shopCanvas.style.cssText = `position:fixed; bottom:${viewport.hudHeight}px; left:0; width:${window.innerWidth}px; height:${SHOP_CANVAS_H}px; display:none; z-index:10; pointer-events:auto;`;
+  shopCanvas.width = window.innerWidth * dpr;
+  shopCanvas.height = SHOP_CANVAS_H * dpr;
+  document.body.appendChild(shopCanvas);
+  shopCtx = shopCanvas.getContext('2d');
+  shopCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  shopCtx.imageSmoothingEnabled = false;
+
+  initSpriteCache();
   initInput();
+  initHotbar();
+  initHotbarInput(hudCanvas);
   window.addEventListener('resize', debouncedResize);
 
   playerName = generateName();
@@ -119,6 +182,7 @@ function init() {
     loadLayer(data.layerMeta, data.initialChunks);
     if (data.stats) localStats = data.stats;
     if (data.blood) gameMap.loadBlood(data.blood);
+    syncInventory(data);
 
     localEntity = new Entity(data.id, data.spawn.x, data.spawn.y, '@', COLORS.PLAYER_LOCAL, playerName, 'south');
 
@@ -168,6 +232,7 @@ function init() {
     loadLayer(data.layerMeta, data.initialChunks);
     if (data.stats) localStats = data.stats;
     if (data.blood) gameMap.loadBlood(data.blood);
+    syncInventory(data);
     remotePlayers.clear();
     if (data.players) {
       for (const p of data.players) {
@@ -193,6 +258,86 @@ function init() {
     }
   });
 
+  network.onInventoryUpdate((data) => {
+    const oldState = getHotbarState();
+    const oldEquip = { ...oldState.equipment };
+    const oldSlots = [...oldState.slots];
+    syncInventory(data);
+
+    // Trigger equip animation if equipment changed
+    const newState = getHotbarState();
+    const w = cachedHudW;
+    const h = cachedHudH;
+    for (const key of ['head', 'chest', 'legs', 'mainHand', 'offHand']) {
+      if (!oldEquip[key] && newState.equipment[key]) {
+        // Item appeared in equipment — animate from hotbar
+        // Find which hotbar slot lost an item (first null that was non-null)
+        let fromSlot = newState.selectedIndex >= 0 ? newState.selectedIndex : 0;
+        const from = getSlotCenter(fromSlot, w, h);
+        const to = getEquipSlotCenter(key, w, h);
+        if (from && to) {
+          setEquipAnim({
+            item: newState.equipment[key],
+            fromX: from.x, fromY: from.y,
+            toX: to.x, toY: to.y,
+            startTime: performance.now(),
+            duration: 200,
+          });
+        }
+        break;
+      }
+    }
+
+    // Trigger unequip animation (item left equipment → went to hotbar)
+    if (!getEquipAnim()) {
+      for (const key of ['head', 'chest', 'legs', 'mainHand', 'offHand']) {
+        if (oldEquip[key] && !newState.equipment[key]) {
+          let toSlot = 0;
+          for (let i = 0; i < 8; i++) {
+            if (!oldSlots[i] && newState.slots[i]) { toSlot = i; break; }
+          }
+          const from = getEquipSlotCenter(key, w, h);
+          const to = getSlotCenter(toSlot, w, h);
+          if (from && to) {
+            setEquipAnim({
+              item: oldEquip[key],
+              fromX: from.x, fromY: from.y,
+              toX: to.x, toY: to.y,
+              startTime: performance.now(),
+              duration: 200,
+            });
+          }
+          break;
+        }
+      }
+    }
+  });
+
+  network.onContainerResult((data) => {
+    if (data.x !== undefined && data.y !== undefined) {
+      openedContainers.add(`${data.x},${data.y}`);
+    }
+    if (data.message) {
+      containerMsg = data.message;
+      containerMsgTime = performance.now();
+    }
+  });
+
+  network.onShopData((data) => {
+    updateShopData(data);
+    if (!getShopState().shopMode) {
+      enterShopMode(data);
+      shopCanvas.style.display = 'block';
+      initShopInput(shopCanvas);
+    }
+  });
+
+  network.onShopResult((data) => {
+    if (data.gold !== undefined && localStats) {
+      localStats.gold = data.gold;
+    }
+  });
+
   initCRT(gameLoop);
 }
 
@@ -201,8 +346,9 @@ function gameLoop(now) {
 
   // Movement with cooldown (slowed by low health and bleed)
   const dir = getMovementDir();
+  const shopActive = getShopState().shopMode;
   const moveCooldown = localStats ? MOVE_COOLDOWN / getSpeedMultiplier(localStats) : MOVE_COOLDOWN;
-  if (dir && now - lastMoveTime >= moveCooldown) {
+  if (dir && !shopActive && now - lastMoveTime >= moveCooldown) {
     const newFacing = dirToFacing(dir.dx, dir.dy);
     const facingChanged = localEntity.facing !== newFacing;
     localEntity.facing = newFacing;
@@ -224,22 +370,58 @@ function gameLoop(now) {
   // Detect ENTRY tile under player
   onEntryTile = gameMap.getTile(localEntity.x, localEntity.y) === TILE.ENTRY;
 
+  // Clear equip animation when done
+  const anim = getEquipAnim();
+  if (anim && now - anim.startTime >= anim.duration) {
+    setEquipAnim(null);
+  }
 
-  // Interact (E key) — ENTRY takes priority over doors
+  // Interact (E key) — priority: shop > unequip (explicit) > ENTRY > container > equip > use > door
   if (consumeInteract()) {
-    if (onEntryTile) {
+    const hotbar = getHotbarState();
+
+    // Shop mode interactions
+    const shopState = getShopState();
+    if (shopState.shopMode) {
+      if (shopState.shopBrowsing === 'shop' && shopState.shopData) {
+        const item = shopState.shopData.inventory[shopState.shopSelectedIndex];
+        if (item && item.stock !== 0) {
+          network.sendBuyFromShop(shopState.shopData.shopId, shopState.shopSelectedIndex);
+        }
+      } else if (shopState.shopBrowsing === 'player') {
+        if (hotbar.selectedIndex >= 0) {
+          network.sendSellToShop(shopState.shopData.shopId, hotbar.selectedIndex);
+        }
+      }
+    } else if (hotbar.selectedEquipSlot) {
+      // Equipment slot selected → unequip (explicit user intent via Shift+N)
+      network.sendUnequipItem(hotbar.selectedEquipSlot);
+    } else if (onEntryTile) {
       network.sendEnterExit();
     } else {
       const offset = FACING_OFFSET[localEntity.facing];
       const tx = localEntity.x + offset.dx;
       const ty = localEntity.y + offset.dy;
-      const door = gameMap.getDoorAt(tx, ty);
-      if (door) {
-        network.sendDoorToggle(door.id);
+
+      const shopAtFacing = gameMap.getShopAt(tx, ty);
+      if (shopAtFacing) {
+        network.sendOpenShop(shopAtFacing.id);
+      } else if (isContainerAt(tx, ty) && !openedContainers.has(`${tx},${ty}`)) {
+        network.sendOpenContainer(tx, ty);
+      } else if (hotbar.selectedIndex >= 0 && hotbar.slots[hotbar.selectedIndex] && hotbar.slots[hotbar.selectedIndex].slot) {
+        network.sendEquipItem(hotbar.selectedIndex);
+      } else if (hotbar.selectedIndex >= 0 && hotbar.slots[hotbar.selectedIndex] && hotbar.slots[hotbar.selectedIndex].type === 'consumable') {
+        network.sendUseItem(hotbar.selectedIndex);
       } else {
-        const standDoor = gameMap.getDoorAt(localEntity.x, localEntity.y);
-        if (standDoor) {
-          network.sendDoorToggle(standDoor.id);
+        // Door logic
+        const door = gameMap.getDoorAt(tx, ty);
+        if (door) {
+          network.sendDoorToggle(door.id);
+        } else {
+          const standDoor = gameMap.getDoorAt(localEntity.x, localEntity.y);
+          if (standDoor) {
+            network.sendDoorToggle(standDoor.id);
+          }
         }
       }
     }
@@ -257,13 +439,63 @@ function gameLoop(now) {
   camera.follow(localEntity, bounds);
 
   // HUD
-  updateHUD(playerName, localEntity.x, localEntity.y, remotePlayers.size + 1, currentLayerId, localStats);
+  updateHUD(playerName, localEntity.x, localEntity.y, remotePlayers.size + 1, currentLayerId, localStats, getHotbarState());
+
+  // Compute equip/use hint for HUD
+  const hotbarForHint = getHotbarState();
+  let equipHint = null;
+  if (hotbarForHint.selectedEquipSlot && hotbarForHint.equipment[hotbarForHint.selectedEquipSlot]) {
+    const eqItem = hotbarForHint.equipment[hotbarForHint.selectedEquipSlot];
+    equipHint = `${eqItem.name} | Unequip (E)`;
+  } else if (hotbarForHint.selectedIndex >= 0) {
+    const item = hotbarForHint.slots[hotbarForHint.selectedIndex];
+    if (item && item.slot) equipHint = `${item.name} | Equip (E)`;
+    else if (item && item.type === 'consumable') equipHint = `${item.name} | Use (E)`;
+  }
+  hudInfo.equipHint = equipHint;
+  hudInfo.shopState = getShopState();
+
+  // Detect container in facing direction (for "Loot (E)" prompt)
+  // Only show if E wouldn't be consumed by equip/unequip or entry
+  let facingContainer = false;
+  if (!onEntryTile) {
+    const offset = FACING_OFFSET[localEntity.facing];
+    const tx = localEntity.x + offset.dx;
+    const ty = localEntity.y + offset.dy;
+    facingContainer = isContainerAt(tx, ty) && !openedContainers.has(`${tx},${ty}`);
+  }
+
+  // Detect shop in facing direction (for "Shop (E)" prompt)
+  let facingShop = false;
+  if (!onEntryTile && !shopActive) {
+    const offset = FACING_OFFSET[localEntity.facing];
+    const tx = localEntity.x + offset.dx;
+    const ty = localEntity.y + offset.dy;
+    facingShop = !!gameMap.getShopAt(tx, ty);
+  }
+
+  // Container result floating message
+  let containerFloatMsg = null;
+  if (containerMsg && performance.now() - containerMsgTime < 2000) {
+    containerFloatMsg = containerMsg;
+  } else if (containerMsg) {
+    containerMsg = null;
+  }
 
   // Gather nearby info hologram text
   const nearbyInfos = gameMap.getInfoNear(localEntity.x, localEntity.y, 1);
 
+  // Render shop overlay on dedicated canvas
+  if (shopActive) {
+    renderShopOverlay(shopCtx, getShopState(), getHotbarState(), window.innerWidth, SHOP_CANVAS_H);
+  } else if (shopCanvas.style.display !== 'none') {
+    // Shop just closed — hide canvas and clean up input
+    shopCanvas.style.display = 'none';
+    destroyShopInput();
+  }
+
   // Render
-  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos);
+  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos, facingContainer, containerFloatMsg, facingShop);
   renderHud(hudInfo);
 }
 

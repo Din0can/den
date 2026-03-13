@@ -3,12 +3,14 @@ import { GameMap } from './game-map.js';
 import { CHUNK_SIZE, chunkKey } from './chunk.js';
 import { TILE_SIZE, TILE, TILE_META } from './config.js';
 import { initAdminiRenderer, adminiRender, adminiRenderMother } from './admini-renderer.js';
+import { initSpriteCache, SPRITE_CATALOG, renderSpriteToElement, getSpriteCanvas } from './sprites.js';
 
 const canvas = document.getElementById('admin-canvas');
 const layerListEl = document.getElementById('layer-list');
 const layerInfoEl = document.getElementById('layer-info');
 const sidebarLayers = document.getElementById('sidebar-layers');
 const sidebarEditor = document.getElementById('sidebar-editor');
+const sidebarItems = document.getElementById('sidebar-items');
 
 const gameMap = new GameMap();
 let activeLayerId = null;
@@ -55,8 +57,8 @@ let currentEntryDown = null;
 let doorOrientation = 'horizontal';
 
 // Mouse world position (for cursor preview)
-let mouseWorldX = -1;
-let mouseWorldY = -1;
+let mouseWorldX = null;
+let mouseWorldY = null;
 
 // Input state
 const keys = {};
@@ -108,6 +110,8 @@ canvas.addEventListener('mousedown', (e) => {
         placeDoor(wx, wy, currentTool === 'door-wood' ? 'wood' : 'metal');
       } else if (currentTool === 'info') {
         placeInfo(wx, wy);
+      } else if (currentTool === 'shop') {
+        placeOrEditShop(wx, wy);
       } else {
         isDrawing = true;
         paintBrush(wx, wy);
@@ -386,6 +390,23 @@ socket.on('infoRemoved', ({ layerId, infoId }) => {
   gameMap.removeInfo(infoId);
 });
 
+socket.on('shopPlaced', ({ layerId, shop }) => {
+  if (layerId !== activeLayerId) return;
+  gameMap._registerShop(shop);
+});
+
+socket.on('shopRemoved', ({ layerId, shopId }) => {
+  if (layerId !== activeLayerId) return;
+  gameMap.removeShop(shopId);
+});
+
+socket.on('shopUpdated', ({ layerId, shop }) => {
+  if (layerId !== activeLayerId) return;
+  // Remove old and re-register
+  gameMap.removeShop(shop.id);
+  gameMap._registerShop(shop);
+});
+
 function centerCamera(bounds) {
   const b = bounds;
   const cols = canvas.width / (TILE_SIZE * zoom);
@@ -526,7 +547,15 @@ const btnCreateLayer = document.getElementById('btn-create-layer');
 const btnCancelCreate = document.getElementById('btn-cancel-create');
 
 btnNewLayer.addEventListener('click', () => {
-  newLayerForm.style.display = newLayerForm.style.display === 'none' ? 'block' : 'none';
+  const showing = newLayerForm.style.display !== 'none';
+  newLayerForm.style.display = showing ? 'none' : 'block';
+  if (!showing) {
+    activeLayerId = null;
+    gameMap.initBounds({ minX: 0, minY: 0, maxX: 0, maxY: 0 });
+    adminPlayers.clear();
+    layerInfoEl.textContent = '';
+    renderSidebar();
+  }
 });
 
 btnCancelCreate.addEventListener('click', () => {
@@ -554,6 +583,7 @@ function enterEditMode(layerId) {
   // Load the layer data
   activeLayerId = layerId;
   socket.emit('loadLayer', { layerId });
+  socket.emit('getItems');
 
   // Switch sidebar
   sidebarLayers.style.display = 'none';
@@ -708,6 +738,7 @@ function handleEditKeydown(e) {
     case 'KeyF': currentTool = 'fill'; updateToolButtons(); break;
     case 'KeyX': currentTool = 'erase'; updateToolButtons(); break;
     case 'KeyI': currentTool = 'info'; updateToolButtons(); break;
+    case 'KeyS': currentTool = 'shop'; updateToolButtons(); break;
     case 'KeyR':
       if (currentTool === 'door-wood' || currentTool === 'door-metal') {
         doorOrientation = doorOrientation === 'horizontal' ? 'vertical' : 'horizontal';
@@ -819,6 +850,640 @@ function placeInfo(wx, wy) {
   socket.emit('placeInfo', { layerId: editingLayerId, x: wx, y: wy, text: text.trim() });
 }
 
+function placeOrEditShop(wx, wy) {
+  // Check if there's an existing shop at this position
+  const existingShop = gameMap.getShopAt(wx, wy);
+  if (existingShop) {
+    openShopEditor(existingShop);
+    return;
+  }
+
+  const name = prompt('Shop name:', 'Shopkeeper');
+  if (!name || name.trim().length === 0) return;
+  socket.emit('placeShop', { layerId: editingLayerId, x: wx, y: wy, name: name.trim() });
+}
+
+function openShopEditor(shop) {
+  const panel = document.getElementById('shop-editor-panel');
+  panel.style.display = 'block';
+  panel.dataset.shopId = shop.id;
+
+  document.getElementById('shop-name').value = shop.name || 'Shopkeeper';
+  document.getElementById('shop-buy-markup').value = shop.buyMarkup ?? 1.0;
+  document.getElementById('shop-sell-markup').value = shop.sellMarkup ?? 0.8;
+
+  // Build inventory list
+  renderShopInventoryEditor(shop.inventory || []);
+}
+
+function renderShopInventoryEditor(inventory) {
+  const list = document.getElementById('shop-inv-list');
+  list.innerHTML = '';
+
+  for (let i = 0; i < inventory.length; i++) {
+    const entry = inventory[i];
+    const row = document.createElement('div');
+    row.className = 'shop-inv-row';
+
+    // Top line: item select + remove button
+    const top = document.createElement('div');
+    top.className = 'shop-inv-top';
+
+    const select = document.createElement('select');
+    select.className = 'shop-item-select';
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = '\u2014 item \u2014';
+    select.appendChild(defaultOpt);
+    for (const [id, item] of Object.entries(cachedItems)) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = `${item.char} ${item.name}`;
+      if (id === entry.itemId) opt.selected = true;
+      select.appendChild(opt);
+    }
+
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = 'x';
+    removeBtn.addEventListener('click', () => row.remove());
+
+    top.appendChild(select);
+    top.appendChild(removeBtn);
+
+    // Bottom line: stock, max, refill with labels
+    const bottom = document.createElement('div');
+    bottom.className = 'shop-inv-bottom';
+
+    const mkLabel = (text) => { const l = document.createElement('label'); l.textContent = text; return l; };
+    const mkInput = (val, min, title) => {
+      const inp = document.createElement('input');
+      inp.type = 'number'; inp.min = min; inp.value = val; inp.title = title;
+      return inp;
+    };
+
+    bottom.appendChild(mkLabel('Stk'));
+    bottom.appendChild(mkInput(entry.stock ?? -1, '-1', 'Current stock (-1=infinite)'));
+    bottom.appendChild(mkLabel('Max'));
+    bottom.appendChild(mkInput(entry.maxStock ?? -1, '-1', 'Max stock (-1=infinite)'));
+    bottom.appendChild(mkLabel('Refill'));
+    bottom.appendChild(mkInput(entry.refillTime ?? 0, '0', 'Refill interval in hours (0=none)'));
+
+    row.appendChild(top);
+    row.appendChild(bottom);
+    list.appendChild(row);
+  }
+}
+
+function getShopInvFromUI() {
+  const rows = document.querySelectorAll('.shop-inv-row');
+  const inv = [];
+  for (const row of rows) {
+    const itemId = row.querySelector('select').value;
+    if (!itemId) continue;
+    const inputs = row.querySelectorAll('input');
+    inv.push({
+      itemId,
+      stock: parseInt(inputs[0].value) ?? -1,
+      maxStock: parseInt(inputs[1].value) ?? -1,
+      refillTime: parseInt(inputs[2].value) || 0,
+    });
+  }
+  return inv;
+}
+
+// ─── Items Panel ──────────────────────────────────────────────────────────────
+
+const KNOWN_EFFECTS = [
+  { key: 'removeBleed', label: 'Remove Bleed', valueLabel: 'stacks' },
+];
+
+function addEffectRow(key = '', value = 1) {
+  const list = document.getElementById('item-effects-list');
+  const row = document.createElement('div');
+  row.className = 'effect-row';
+
+  // Top row: select + remove button
+  const topRow = document.createElement('div');
+  topRow.className = 'effect-row-top';
+
+  const select = document.createElement('select');
+  for (const eff of KNOWN_EFFECTS) {
+    const opt = document.createElement('option');
+    opt.value = eff.key;
+    opt.textContent = eff.label;
+    if (eff.key === key) opt.selected = true;
+    select.appendChild(opt);
+  }
+
+  const removeBtn = document.createElement('button');
+  removeBtn.textContent = 'x';
+  removeBtn.addEventListener('click', () => row.remove());
+
+  topRow.appendChild(select);
+  topRow.appendChild(removeBtn);
+
+  // Bottom row: label + value input
+  const bottomRow = document.createElement('div');
+  bottomRow.className = 'effect-row-bottom';
+
+  const valLabel = document.createElement('label');
+  const getValueLabel = (k) => {
+    const eff = KNOWN_EFFECTS.find(e => e.key === k);
+    return eff ? eff.valueLabel : 'value';
+  };
+  valLabel.textContent = getValueLabel(select.value);
+  select.addEventListener('change', () => {
+    valLabel.textContent = getValueLabel(select.value);
+  });
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '1';
+  input.value = value;
+
+  bottomRow.appendChild(valLabel);
+  bottomRow.appendChild(input);
+
+  row.appendChild(topRow);
+  row.appendChild(bottomRow);
+  list.appendChild(row);
+}
+
+document.getElementById('btn-add-effect').addEventListener('click', () => {
+  addEffectRow();
+});
+
+function getEffectsFromUI() {
+  const rows = document.querySelectorAll('.effect-row');
+  if (rows.length === 0) return null;
+  const effect = {};
+  for (const row of rows) {
+    const key = row.querySelector('select').value;
+    const val = parseInt(row.querySelector('input').value) || 1;
+    effect[key] = val;
+  }
+  return effect;
+}
+
+const RARITY_COLORS = {
+  common: '#888888',
+  uncommon: '#5a8a5a',
+  rare: '#4a7a9a',
+  epic: '#7a5a8a',
+  legendary: '#9a7a3a',
+};
+
+// Init sprite cache at load
+initSpriteCache();
+
+let cachedItems = {};
+let selectedItemId = null;
+let selectedSprite = null; // currently selected sprite name for item form
+
+// --- Sprite picker ---
+function buildSpritePicker() {
+  const picker = document.getElementById('sprite-picker');
+  picker.innerHTML = '';
+  const rarity = document.getElementById('item-rarity').value || 'common';
+
+  for (const cat of SPRITE_CATALOG) {
+    const header = document.createElement('div');
+    header.className = 'sprite-category';
+    header.textContent = cat.category;
+    picker.appendChild(header);
+
+    const grid = document.createElement('div');
+    grid.className = 'sprite-grid';
+
+    for (const sp of cat.sprites) {
+      const swatch = document.createElement('button');
+      swatch.className = 'sprite-swatch';
+      swatch.title = sp.label;
+      if (sp.name === selectedSprite) swatch.classList.add('active');
+
+      const c = document.createElement('canvas');
+      c.width = 24;
+      c.height = 24;
+      c.style.width = '24px';
+      c.style.height = '24px';
+      renderSpriteToElement(c, sp.name, rarity, 22);
+      swatch.appendChild(c);
+
+      swatch.addEventListener('click', () => {
+        selectedSprite = sp.name;
+        updateSpritePreview();
+        // Update active state
+        picker.querySelectorAll('.sprite-swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+      });
+
+      grid.appendChild(swatch);
+    }
+    picker.appendChild(grid);
+  }
+}
+
+function updateSpritePreview() {
+  const preview = document.getElementById('sprite-preview');
+  const label = document.getElementById('sprite-name-label');
+  if (selectedSprite) {
+    const rarity = document.getElementById('item-rarity').value || 'common';
+    renderSpriteToElement(preview, selectedSprite, rarity, 32);
+    preview.classList.add('has-sprite');
+    label.textContent = selectedSprite;
+  } else {
+    const ctx = preview.getContext('2d');
+    ctx.clearRect(0, 0, preview.width, preview.height);
+    preview.classList.remove('has-sprite');
+    label.textContent = 'none';
+  }
+}
+
+// Toggle sprite picker visibility
+document.getElementById('sprite-preview').addEventListener('click', () => {
+  const picker = document.getElementById('sprite-picker');
+  if (picker.style.display === 'none') {
+    buildSpritePicker();
+    picker.style.display = 'block';
+  } else {
+    picker.style.display = 'none';
+  }
+});
+
+// Clear sprite
+document.getElementById('btn-clear-sprite').addEventListener('click', () => {
+  selectedSprite = null;
+  updateSpritePreview();
+  document.getElementById('sprite-picker').querySelectorAll('.sprite-swatch').forEach(s => s.classList.remove('active'));
+});
+
+// Re-tint picker swatches when rarity changes
+document.getElementById('item-rarity').addEventListener('change', () => {
+  const picker = document.getElementById('sprite-picker');
+  if (picker.style.display !== 'none') {
+    buildSpritePicker();
+  }
+  updateSpritePreview();
+});
+
+document.getElementById('btn-items').addEventListener('click', () => {
+  sidebarLayers.style.display = 'none';
+  sidebarItems.style.display = 'block';
+  socket.emit('getItems');
+  socket.emit('getContainerConfig');
+  socket.emit('getRarityWeights');
+});
+
+document.getElementById('btn-items-back').addEventListener('click', () => {
+  sidebarItems.style.display = 'none';
+  sidebarLayers.style.display = 'block';
+});
+
+document.getElementById('btn-new-item').addEventListener('click', () => {
+  selectedItemId = null;
+  clearItemForm();
+  document.getElementById('item-form').style.display = 'block';
+  document.getElementById('item-id').disabled = false;
+  renderItemList();
+});
+
+socket.on('itemList', ({ items }) => {
+  cachedItems = items || {};
+  renderItemList();
+});
+
+socket.on('itemSaved', ({ item }) => {
+  cachedItems[item.id] = item;
+  selectedItemId = item.id;
+  renderItemList();
+  document.getElementById('item-form').style.display = 'none';
+  // Flash saved item row
+  const listEl = document.getElementById('item-list');
+  for (const li of listEl.children) {
+    if (li.classList.contains('active')) {
+      li.classList.add('flash-save');
+      setTimeout(() => li.classList.remove('flash-save'), 600);
+      break;
+    }
+  }
+});
+
+socket.on('itemDeleted', ({ id: itemId }) => {
+  delete cachedItems[itemId];
+  if (selectedItemId === itemId) {
+    selectedItemId = null;
+    document.getElementById('item-form').style.display = 'none';
+  }
+  renderItemList();
+});
+
+function renderItemList() {
+  const listEl = document.getElementById('item-list');
+  listEl.innerHTML = '';
+  for (const [id, item] of Object.entries(cachedItems)) {
+    const li = document.createElement('li');
+    if (id === selectedItemId) li.classList.add('active');
+
+    if (item.sprite && getSpriteCanvas(item.sprite, item.rarity || 'common')) {
+      const c = document.createElement('canvas');
+      c.width = 18;
+      c.height = 18;
+      c.style.width = '18px';
+      c.style.height = '18px';
+      c.style.imageRendering = 'pixelated';
+      c.style.flexShrink = '0';
+      renderSpriteToElement(c, item.sprite, item.rarity || 'common', 14);
+      li.appendChild(c);
+    } else {
+      const charSpan = document.createElement('span');
+      charSpan.className = 'item-char';
+      charSpan.style.color = RARITY_COLORS[item.rarity] || '#888';
+      charSpan.textContent = item.char || '?';
+      li.appendChild(charSpan);
+    }
+
+    const dot = document.createElement('span');
+    dot.className = 'rarity-dot';
+    dot.style.backgroundColor = RARITY_COLORS[item.rarity] || '#888';
+    li.appendChild(dot);
+
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = item.name || id;
+    li.appendChild(nameSpan);
+
+    li.addEventListener('click', () => {
+      selectedItemId = id;
+      populateItemForm(item);
+      document.getElementById('item-form').style.display = 'block';
+      document.getElementById('item-id').disabled = true; // Can't change ID of existing
+      renderItemList();
+    });
+    listEl.appendChild(li);
+  }
+}
+
+function clearItemForm() {
+  document.getElementById('item-id').value = '';
+  document.getElementById('item-name').value = '';
+  document.getElementById('item-char').value = '';
+  document.getElementById('item-type').value = 'weapon';
+  document.getElementById('item-slot').value = '';
+  document.getElementById('item-rarity').value = 'common';
+  document.getElementById('item-min-layer').value = '0';
+  document.getElementById('item-armor').value = '0';
+  document.getElementById('item-damage').value = '0';
+  document.getElementById('item-max-stack').value = '1';
+  document.getElementById('item-stackable').checked = false;
+  document.getElementById('item-two-handed').checked = false;
+  document.getElementById('item-effects-list').innerHTML = '';
+  document.getElementById('item-description').value = '';
+  selectedSprite = null;
+  updateSpritePreview();
+  document.getElementById('sprite-picker').style.display = 'none';
+}
+
+function populateItemForm(item) {
+  document.getElementById('item-id').value = item.id || '';
+  document.getElementById('item-name').value = item.name || '';
+  document.getElementById('item-char').value = item.char || '';
+  document.getElementById('item-type').value = item.type || 'weapon';
+  document.getElementById('item-slot').value = item.slot || '';
+  document.getElementById('item-rarity').value = item.rarity || 'common';
+  document.getElementById('item-min-layer').value = item.minLayer ?? 0;
+  document.getElementById('item-armor').value = item.armor ?? 0;
+  document.getElementById('item-damage').value = item.damage ?? 0;
+  document.getElementById('item-max-stack').value = item.maxStack ?? 1;
+  document.getElementById('item-stackable').checked = !!item.stackable;
+  document.getElementById('item-two-handed').checked = !!item.twoHanded;
+  document.getElementById('item-effects-list').innerHTML = '';
+  if (item.effect) {
+    for (const [key, val] of Object.entries(item.effect)) {
+      addEffectRow(key, val);
+    }
+  }
+  document.getElementById('item-description').value = item.description || '';
+  selectedSprite = item.sprite || null;
+  updateSpritePreview();
+  document.getElementById('sprite-picker').style.display = 'none';
+}
+
+document.getElementById('btn-save-item').addEventListener('click', () => {
+  const id = document.getElementById('item-id').value.trim();
+  if (!id) return alert('Item ID is required');
+  if (!/^[a-z0-9_]+$/.test(id)) return alert('ID must be lowercase alphanumeric with underscores');
+
+  const effect = getEffectsFromUI();
+
+  const item = {
+    id,
+    name: document.getElementById('item-name').value.trim() || id,
+    char: document.getElementById('item-char').value || '?',
+    type: document.getElementById('item-type').value,
+    slot: document.getElementById('item-slot').value || null,
+    rarity: document.getElementById('item-rarity').value,
+    stackable: document.getElementById('item-stackable').checked,
+    maxStack: parseInt(document.getElementById('item-max-stack').value) || 1,
+    armor: parseInt(document.getElementById('item-armor').value) || 0,
+    damage: parseInt(document.getElementById('item-damage').value) || 0,
+    twoHanded: document.getElementById('item-two-handed').checked,
+    minLayer: parseInt(document.getElementById('item-min-layer').value) || 0,
+    effect,
+    description: document.getElementById('item-description').value.trim(),
+    sprite: selectedSprite || null,
+  };
+
+  selectedItemId = id;
+  socket.emit('saveItem', { item });
+});
+
+document.getElementById('btn-delete-item').addEventListener('click', () => {
+  if (!selectedItemId) return;
+  if (!confirm(`Delete item "${selectedItemId}"?`)) return;
+  socket.emit('deleteItem', { id: selectedItemId });
+});
+
+// Shop editor buttons
+document.getElementById('btn-shop-add-item').addEventListener('click', () => {
+  renderShopInventoryEditor([...getShopInvFromUI(), { itemId: '', stock: -1, maxStock: -1, refillTime: 0 }]);
+});
+
+document.getElementById('btn-shop-save').addEventListener('click', () => {
+  const panel = document.getElementById('shop-editor-panel');
+  const shopId = parseInt(panel.dataset.shopId);
+
+  const name = document.getElementById('shop-name').value.trim() || 'Shopkeeper';
+  const buyMarkup = parseFloat(document.getElementById('shop-buy-markup').value) || 1.0;
+  const sellMarkup = parseFloat(document.getElementById('shop-sell-markup').value) || 0.8;
+  const inventory = getShopInvFromUI();
+
+  socket.emit('updateShop', { layerId: editingLayerId, shopId, name, buyMarkup, sellMarkup, inventory });
+  panel.style.display = 'none';
+});
+
+document.getElementById('btn-shop-delete').addEventListener('click', () => {
+  const panel = document.getElementById('shop-editor-panel');
+  const shopId = parseInt(panel.dataset.shopId);
+  if (!confirm('Delete this shop?')) return;
+  socket.emit('removeShop', { layerId: editingLayerId, shopId });
+  panel.style.display = 'none';
+});
+
+document.getElementById('btn-shop-cancel').addEventListener('click', () => {
+  document.getElementById('shop-editor-panel').style.display = 'none';
+});
+
+// --- Container config ---
+socket.on('containerConfig', (config) => {
+  if (config.chest) document.getElementById('cc-chest').value = Math.round(config.chest.dropChance * 100);
+  if (config.barrel) document.getElementById('cc-barrel').value = Math.round(config.barrel.dropChance * 100);
+  if (config.crate) document.getElementById('cc-crate').value = Math.round(config.crate.dropChance * 100);
+});
+
+socket.on('containerConfigSaved', () => {
+  const btn = document.getElementById('btn-save-containers');
+  btn.textContent = 'Saved!';
+  setTimeout(() => { btn.textContent = 'Save Containers'; }, 1000);
+});
+
+document.getElementById('btn-save-containers').addEventListener('click', () => {
+  const config = {
+    chest:  { dropChance: parseInt(document.getElementById('cc-chest').value) / 100, rolls: [1, 1] },
+    barrel: { dropChance: parseInt(document.getElementById('cc-barrel').value) / 100, rolls: [1, 1] },
+    crate:  { dropChance: parseInt(document.getElementById('cc-crate').value) / 100, rolls: [1, 1] },
+  };
+  socket.emit('saveContainerConfig', config);
+});
+
+// --- Rarity weights editor ---
+const RARITY_LABELS = ['Com', 'Unc', 'Rar', 'Epi', 'Leg'];
+let cachedBrackets = [];
+
+function renderRarityBrackets(brackets) {
+  cachedBrackets = brackets;
+  const container = document.getElementById('rw-brackets');
+  container.innerHTML = '';
+
+  for (let i = 0; i < brackets.length; i++) {
+    const b = brackets[i];
+    const isLast = b.maxDepth === null;
+    const prevMax = i > 0 ? brackets[i - 1].maxDepth : -1;
+    const startLayer = prevMax + 1;
+
+    const card = document.createElement('div');
+    card.className = 'rw-bracket';
+    card.dataset.index = i;
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'rw-header';
+    const label = document.createElement('span');
+    label.className = 'rw-label';
+    if (isLast) {
+      label.textContent = `L ${startLayer}+`;
+    } else {
+      label.innerHTML = `L ${startLayer} – `;
+      const depthInput = document.createElement('input');
+      depthInput.type = 'number';
+      depthInput.min = startLayer;
+      depthInput.value = b.maxDepth;
+      depthInput.dataset.field = 'maxDepth';
+      depthInput.addEventListener('input', () => {
+        const cards = document.querySelectorAll('.rw-bracket');
+        let prevMax = -1;
+        cards.forEach((card, idx) => {
+          const isLastCard = idx === cards.length - 1;
+          const labelEl = card.querySelector('.rw-label');
+          const di = card.querySelector('input[data-field="maxDepth"]');
+          const startLayer = prevMax + 1;
+          if (isLastCard) {
+            labelEl.childNodes[0].textContent = `L ${startLayer}+`;
+          } else {
+            labelEl.childNodes[0].textContent = `L ${startLayer} – `;
+            prevMax = Number(di.value) || startLayer;
+          }
+        });
+      });
+      label.appendChild(depthInput);
+    }
+    header.appendChild(label);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'rw-remove';
+    removeBtn.textContent = 'x';
+    removeBtn.disabled = brackets.length <= 1;
+    removeBtn.addEventListener('click', () => {
+      const fresh = collectBracketsFromUI();
+      fresh.splice(i, 1);
+      renderRarityBrackets(fresh);
+    });
+    header.appendChild(removeBtn);
+    card.appendChild(header);
+
+    // Weight inputs
+    const weightsDiv = document.createElement('div');
+    weightsDiv.className = 'rw-weights';
+    for (let w = 0; w < 5; w++) {
+      const wDiv = document.createElement('span');
+      wDiv.className = 'rw-w';
+      const wLabel = document.createElement('label');
+      wLabel.textContent = RARITY_LABELS[w];
+      const wInput = document.createElement('input');
+      wInput.type = 'number';
+      wInput.min = 0;
+      wInput.value = b.weights[w];
+      wInput.dataset.field = 'weight';
+      wInput.dataset.wi = w;
+      wDiv.appendChild(wLabel);
+      wDiv.appendChild(wInput);
+      weightsDiv.appendChild(wDiv);
+    }
+    card.appendChild(weightsDiv);
+    container.appendChild(card);
+  }
+}
+
+function collectBracketsFromUI() {
+  const cards = document.querySelectorAll('.rw-bracket');
+  const brackets = [];
+  cards.forEach((card, i) => {
+    const isLast = i === cards.length - 1;
+    const depthInput = card.querySelector('input[data-field="maxDepth"]');
+    const maxDepth = isLast ? null : Number(depthInput?.value || 0);
+    const weights = [];
+    card.querySelectorAll('input[data-field="weight"]').forEach(inp => {
+      weights[Number(inp.dataset.wi)] = Number(inp.value) || 0;
+    });
+    brackets.push({ maxDepth, weights });
+  });
+  return brackets;
+}
+
+socket.on('rarityWeights', (brackets) => {
+  renderRarityBrackets(brackets);
+});
+
+document.getElementById('btn-add-bracket').addEventListener('click', () => {
+  const brackets = collectBracketsFromUI();
+  // Insert new bracket before the last (catch-all) one
+  const lastIdx = brackets.length - 1;
+  const prevMax = lastIdx > 0 ? (brackets[lastIdx - 1].maxDepth || 0) : 0;
+  const newMax = prevMax + 2;
+  brackets.splice(lastIdx, 0, { maxDepth: newMax, weights: [25, 25, 25, 15, 10] });
+  renderRarityBrackets(brackets);
+});
+
+document.getElementById('btn-save-rarity').addEventListener('click', () => {
+  const brackets = collectBracketsFromUI();
+  socket.emit('saveRarityWeights', brackets);
+});
+
+socket.on('rarityWeightsSaved', (data) => {
+  if (data) renderRarityBrackets(data);
+  const btn = document.getElementById('btn-save-rarity');
+  btn.textContent = 'Saved!';
+  setTimeout(() => { btn.textContent = 'Save Drop Rates'; }, 1000);
+});
+
 // Pan speed: ~15 tiles/sec
 const PAN_SPEED = 15;
 let lastTime = performance.now();
@@ -861,6 +1526,8 @@ function gameLoop(now) {
     mouseWorldX, mouseWorldY, brushSize, currentTool,
     entryUp: currentEntryUp, entryDown: currentEntryDown,
     doorOrientation,
+    shops: gameMap._allShops,
+    selectedTile: selectedTiles.length === 1 ? selectedTiles[0] : null,
   } : null;
 
   if (viewMode === 'mother') {

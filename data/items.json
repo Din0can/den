@@ -1,0 +1,21 @@
+{
+  "bandage": {
+    "id": "bandage",
+    "name": "Bandage",
+    "char": "+",
+    "type": "consumable",
+    "slot": null,
+    "rarity": "common",
+    "stackable": true,
+    "maxStack": 5,
+    "armor": 0,
+    "damage": 0,
+    "twoHanded": false,
+    "minLayer": 0,
+    "effect": {
+      "removeBleed": 2
+    },
+    "description": "Stops bleeding. Removes 2 bleed stacks.",
+    "sprite": "bandage"
+  }
+}

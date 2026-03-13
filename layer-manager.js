@@ -33,12 +33,16 @@ export class StaticLayer {
     // Info points: [{id, x, y, text}, ...]
     this.infoPoints = dungeonData.infoPoints || [];
 
-    // Chunk storage: chunkKey -> { tiles, overlay, doors, infoPoints }
+    // Shops: [{id, x, y, name, buyMarkup, sellMarkup, inventory}, ...]
+    this.shops = dungeonData.shops || [];
+
+    // Chunk storage: chunkKey -> { tiles, overlay, doors, infoPoints, shops }
     this.chunks = new Map();
     this._chunkify(dungeonData.map, dungeonData.width, dungeonData.height);
     this._distributeOverlay(dungeonData.overlay);
     this._distributeDoors();
     this._distributeInfoPoints();
+    this._distributeShops();
   }
 
   /** Convert flat map array to chunks */
@@ -57,7 +61,7 @@ export class StaticLayer {
             }
           }
         }
-        this.chunks.set(chunkKey(cx, cy), { tiles, overlay: [], doors: [], infoPoints: [] });
+        this.chunks.set(chunkKey(cx, cy), { tiles, overlay: [], doors: [], infoPoints: [], shops: [] });
       }
     }
   }
@@ -104,6 +108,17 @@ export class StaticLayer {
     }
   }
 
+  /** Assign shops to their respective chunks */
+  _distributeShops() {
+    if (!this.shops) return;
+    for (const shop of this.shops) {
+      const { cx, cy } = worldToChunk(shop.x, shop.y);
+      const key = chunkKey(cx, cy);
+      const chunk = this.chunks.get(key);
+      if (chunk) chunk.shops.push(shop);
+    }
+  }
+
   /** Expand bounds to include position (x, y). Handles empty initial state. */
   _expandBounds(x, y) {
     if (this.bounds.minX === 0 && this.bounds.maxX === 0 && this.bounds.minY === 0 && this.bounds.maxY === 0) {
@@ -140,6 +155,7 @@ export class StaticLayer {
       rooms: this.rooms,
       doors: this.doors,
       infoPoints: this.infoPoints,
+      shops: this.shops,
       entryUp: this.entryUp,
       entryDown: this.entryDown,
     };
@@ -186,7 +202,7 @@ export class StaticLayer {
     const { cx, cy } = worldToChunk(x, y);
     const key = chunkKey(cx, cy);
     if (!this.chunks.has(key)) {
-      this.chunks.set(key, { tiles: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE), overlay: [], doors: [], infoPoints: [] });
+      this.chunks.set(key, { tiles: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE), overlay: [], doors: [], infoPoints: [], shops: [] });
     }
     return this.chunks.get(key);
   }
@@ -204,6 +220,7 @@ export class StaticLayer {
           overlay: chunk.overlay,
           doors: chunk.doors,
           infoPoints: chunk.infoPoints,
+          shops: chunk.shops,
         });
       }
     }
@@ -317,6 +334,47 @@ export class StaticLayer {
     let maxId = 0;
     for (const info of this.infoPoints) {
       if (info.id > maxId) maxId = info.id;
+    }
+    return maxId + 1;
+  }
+
+  /** Add a shop to the layer and distribute to chunks */
+  addShop(shop) {
+    this.shops.push(shop);
+    const { cx, cy } = worldToChunk(shop.x, shop.y);
+    const key = chunkKey(cx, cy);
+    const chunk = this.chunks.get(key);
+    if (chunk) chunk.shops.push(shop);
+  }
+
+  /** Remove a shop by ID, returns the removed shop or null */
+  removeShop(shopId) {
+    const idx = this.shops.findIndex(s => s.id === shopId);
+    if (idx < 0) return null;
+    const shop = this.shops[idx];
+    this.shops.splice(idx, 1);
+    for (const [, chunk] of this.chunks) {
+      const ci = chunk.shops.findIndex(s => s.id === shopId);
+      if (ci >= 0) chunk.shops.splice(ci, 1);
+    }
+    return shop;
+  }
+
+  /** Find shop at world position */
+  getShopAt(x, y) {
+    return this.shops.find(s => s.x === x && s.y === y) || null;
+  }
+
+  /** Find shop by ID */
+  getShopById(shopId) {
+    return this.shops.find(s => s.id === shopId) || null;
+  }
+
+  /** Get next available shop ID */
+  getNextShopId() {
+    let maxId = 0;
+    for (const shop of this.shops) {
+      if (shop.id > maxId) maxId = shop.id;
     }
     return maxId + 1;
   }
@@ -585,16 +643,19 @@ export class LayerManager {
         overlay: chunkData.overlay || [],
         doors: [],
         infoPoints: [],
+        shops: [],
       });
     }
     layer.bounds = data.bounds || { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     layer.rooms = data.rooms || [];
     layer.doors = data.doors || [];
     layer.infoPoints = data.infoPoints || [];
+    layer.shops = data.shops || [];
     layer.entryUp = data.entryUp || null;
     layer.entryDown = data.entryDown || null;
     layer._distributeDoors();
     layer._distributeInfoPoints();
+    layer._distributeShops();
     const b = layer.bounds;
     console.log(`Layer ${id} restored (static chunks, ${b.maxX - b.minX}x${b.maxY - b.minY}, ${Object.keys(data.chunks).length} chunks)`);
     return layer;

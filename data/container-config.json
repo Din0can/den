@@ -1,0 +1,5 @@
+{
+  "chest": { "dropChance": 0.9, "rolls": [1, 1] },
+  "barrel": { "dropChance": 0.4, "rolls": [1, 1] },
+  "crate": { "dropChance": 0.6, "rolls": [1, 1] }
+}
