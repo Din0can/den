@@ -11,6 +11,7 @@ const layerInfoEl = document.getElementById('layer-info');
 const sidebarLayers = document.getElementById('sidebar-layers');
 const sidebarEditor = document.getElementById('sidebar-editor');
 const sidebarItems = document.getElementById('sidebar-items');
+const sidebarEnemies = document.getElementById('sidebar-enemies');
 
 const gameMap = new GameMap();
 let activeLayerId = null;
@@ -29,6 +30,9 @@ const motherData = {
 
 // Player positions for static/player views
 const adminPlayers = new Map();
+
+// Enemies on the currently viewed layer
+const adminEnemies = new Map(); // id -> { id, type, x, y, facing, hp, maxHp, char, color, name, state, stateTime }
 
 // Camera state (world coordinates of top-left visible tile)
 let cameraX = 0;
@@ -198,6 +202,7 @@ socket.on('layerChunks', ({ layerId, meta, chunks, players: layerPlayers }) => {
   viewMode = 'static';
   gameMap.loadChunks(chunks);
   adminPlayers.clear();
+  adminEnemies.clear();
   if (layerPlayers) {
     for (const p of layerPlayers) {
       adminPlayers.set(p.id, p);
@@ -218,6 +223,7 @@ socket.on('layerChunks', ({ layerId, meta, chunks, players: layerPlayers }) => {
 socket.on('motherView', ({ layerId, meta, materialized, bones, wings, players: layerPlayers }) => {
   if (layerId !== activeLayerId) return;
   viewMode = 'mother';
+  adminEnemies.clear();
 
   motherData.materialized = materialized;
   motherData.boneMap = new GameMap();
@@ -405,6 +411,41 @@ socket.on('shopUpdated', ({ layerId, shop }) => {
   // Remove old and re-register
   gameMap.removeShop(shop.id);
   gameMap._registerShop(shop);
+});
+
+// --- Enemy tracking for admin view ---
+socket.on('adminEnemySnapshot', ({ enemies }) => {
+  adminEnemies.clear();
+  if (enemies) {
+    for (const e of enemies) {
+      adminEnemies.set(e.id, { ...e, stateTime: performance.now() });
+    }
+  }
+});
+
+socket.on('adminEnemyUpdate', (data) => {
+  if (data.spawned) {
+    for (const e of data.spawned) {
+      adminEnemies.set(e.id, { ...e, stateTime: performance.now() });
+    }
+  }
+  if (data.moved) {
+    for (const m of data.moved) {
+      const e = adminEnemies.get(m.id);
+      if (e) { e.x = m.x; e.y = m.y; e.facing = m.facing; }
+    }
+  }
+  if (data.stateChanged) {
+    for (const s of data.stateChanged) {
+      const e = adminEnemies.get(s.id);
+      if (e) { e.state = s.state; e.stateTime = performance.now(); }
+    }
+  }
+  if (data.despawned) {
+    for (const id of data.despawned) {
+      adminEnemies.delete(id);
+    }
+  }
 });
 
 function centerCamera(bounds) {
@@ -1139,6 +1180,100 @@ document.getElementById('btn-items-back').addEventListener('click', () => {
   sidebarLayers.style.display = 'block';
 });
 
+// --- Enemy editor ---
+let cachedEnemyTypes = {};
+
+document.getElementById('btn-enemies').addEventListener('click', () => {
+  sidebarLayers.style.display = 'none';
+  sidebarEnemies.style.display = 'block';
+  socket.emit('getEnemyTypes');
+});
+
+document.getElementById('btn-enemies-back').addEventListener('click', () => {
+  sidebarEnemies.style.display = 'none';
+  sidebarLayers.style.display = 'block';
+});
+
+socket.on('enemyTypeList', (types) => {
+  cachedEnemyTypes = types || {};
+  renderEnemyList();
+});
+
+socket.on('enemyTypeSaved', ({ id, type }) => {
+  cachedEnemyTypes[id] = type;
+  // Flash the saved card
+  const card = document.querySelector(`.enemy-card[data-id="${id}"]`);
+  if (card) {
+    card.classList.add('flash-save');
+    setTimeout(() => card.classList.remove('flash-save'), 600);
+  }
+  // Update input values in case another admin changed them
+  renderEnemyList();
+});
+
+function renderEnemyList() {
+  const listEl = document.getElementById('enemy-list');
+  listEl.innerHTML = '';
+  for (const [id, t] of Object.entries(cachedEnemyTypes)) {
+    const card = document.createElement('div');
+    card.className = 'enemy-card';
+    card.dataset.id = id;
+    card.innerHTML = `
+      <div class="enemy-card-header">
+        <span class="enemy-card-char" style="color:${t.color}">${t.char}</span>
+        <strong>${t.name}</strong>
+        <span style="color:#666;font-size:10px">(${id})</span>
+      </div>
+      <div class="form-row">
+        <div><label>HP</label><input type="number" data-field="hp" value="${t.hp}" min="1"></div>
+        <div><label>DMG</label><input type="number" data-field="damage" value="${t.damage}" min="0"></div>
+        <div><label>ARM</label><input type="number" data-field="armor" value="${t.armor}" min="0"></div>
+      </div>
+      <div class="form-row">
+        <div><label>Speed (ms)</label><input type="number" data-field="moveSpeed" value="${t.moveSpeed}" min="50"></div>
+        <div><label>Sight</label><input type="number" data-field="sightRange" value="${t.sightRange}" min="1"></div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>Color</label>
+          <input type="text" data-field="color" value="${t.color}" maxlength="7" style="width:100%">
+        </div>
+        <div>
+          <label>Ownership</label>
+          <select data-field="ownership">
+            <option value="player"${t.ownership === 'player' ? ' selected' : ''}>player</option>
+            <option value="layer"${t.ownership === 'layer' ? ' selected' : ''}>layer</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div><label>Atk Range</label><input type="number" data-field="attackRange" value="${t.attackRange || 1}" min="1"></div>
+        <div><label>Atk Speed (ms)</label><input type="number" data-field="attackSpeed" value="${t.attackSpeed || 1000}" min="100"></div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>Incorporeal</label>
+          <select data-field="incorporeal">
+            <option value="false"${!t.incorporeal ? ' selected' : ''}>No</option>
+            <option value="true"${t.incorporeal ? ' selected' : ''}>Yes</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn-save-enemy">Save</button>
+    `;
+    card.querySelector('.btn-save-enemy').addEventListener('click', () => {
+      const fields = {};
+      for (const input of card.querySelectorAll('input, select')) {
+        const field = input.dataset.field;
+        if (!field) continue;
+        fields[field] = input.type === 'number' ? Number(input.value) : input.value;
+      }
+      socket.emit('saveEnemyType', { id, ...fields });
+    });
+    listEl.appendChild(card);
+  }
+}
+
 document.getElementById('btn-new-item').addEventListener('click', () => {
   selectedItemId = null;
   clearItemForm();
@@ -1235,6 +1370,8 @@ function clearItemForm() {
   document.getElementById('item-max-stack').value = '1';
   document.getElementById('item-stackable').checked = false;
   document.getElementById('item-two-handed').checked = false;
+  document.getElementById('item-attack-range').value = '0';
+  document.getElementById('item-attack-speed').value = '0';
   document.getElementById('item-effects-list').innerHTML = '';
   document.getElementById('item-description').value = '';
   selectedSprite = null;
@@ -1255,6 +1392,8 @@ function populateItemForm(item) {
   document.getElementById('item-max-stack').value = item.maxStack ?? 1;
   document.getElementById('item-stackable').checked = !!item.stackable;
   document.getElementById('item-two-handed').checked = !!item.twoHanded;
+  document.getElementById('item-attack-range').value = item.attackRange ?? 0;
+  document.getElementById('item-attack-speed').value = item.attackSpeed ?? 0;
   document.getElementById('item-effects-list').innerHTML = '';
   if (item.effect) {
     for (const [key, val] of Object.entries(item.effect)) {
@@ -1285,6 +1424,8 @@ document.getElementById('btn-save-item').addEventListener('click', () => {
     maxStack: parseInt(document.getElementById('item-max-stack').value) || 1,
     armor: parseInt(document.getElementById('item-armor').value) || 0,
     damage: parseInt(document.getElementById('item-damage').value) || 0,
+    attackRange: parseInt(document.getElementById('item-attack-range').value) || 0,
+    attackSpeed: parseInt(document.getElementById('item-attack-speed').value) || 0,
     twoHanded: document.getElementById('item-two-handed').checked,
     minLayer: parseInt(document.getElementById('item-min-layer').value) || 0,
     effect,
@@ -1531,9 +1672,9 @@ function gameLoop(now) {
   } : null;
 
   if (viewMode === 'mother') {
-    adminiRenderMother(motherData, camX, camY, zoom);
+    adminiRenderMother(motherData, camX, camY, zoom, adminEnemies);
   } else {
-    adminiRender(gameMap, camX, camY, viewMode === 'player' || viewMode === 'static' ? adminPlayers : null, zoom, editState);
+    adminiRender(gameMap, camX, camY, viewMode === 'player' || viewMode === 'static' ? adminPlayers : null, zoom, editState, adminEnemies);
   }
 
   requestAnimationFrame(gameLoop);

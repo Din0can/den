@@ -68,6 +68,41 @@ function drawPlayers(playersMap, cameraX, cameraY) {
   }
 }
 
+/** Draw enemy markers on the map */
+function drawEnemies(enemiesMap, cameraX, cameraY) {
+  if (!enemiesMap || enemiesMap.size === 0) return;
+
+  ctx.font = FONT;
+  ctx.textBaseline = 'top';
+
+  for (const [, e] of enemiesMap) {
+    const px = (e.x - cameraX) * TILE_SIZE;
+    const py = (e.y - cameraY) * TILE_SIZE;
+
+    // Draw character
+    ctx.fillStyle = e.color || '#aa4444';
+    ctx.fillText(e.char || '?', px + 2, py + 1);
+
+    // State indicator above
+    if (e.state === 'alert') {
+      ctx.fillStyle = '#ffff00';
+      ctx.font = `bold ${FONT_SIZE}px 'JetBrains Mono', monospace`;
+      ctx.fillText('!', px + 2, py - FONT_SIZE * 0.6);
+      ctx.font = FONT;
+    } else if (e.state === 'chase') {
+      ctx.fillStyle = '#ff4444';
+      ctx.font = SMALL_FONT;
+      ctx.fillText('chase', px + 2, py - FONT_SIZE * 0.5);
+      ctx.font = FONT;
+    } else if (e.state === 'search') {
+      ctx.fillStyle = '#ffaa44';
+      ctx.font = SMALL_FONT;
+      ctx.fillText('search', px + 2, py - FONT_SIZE * 0.5);
+      ctx.font = FONT;
+    }
+  }
+}
+
 /** Draw grid lines at tile boundaries (edit mode) */
 function adminiRenderGrid(cameraX, cameraY, zoom, cols, rows) {
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
@@ -245,7 +280,7 @@ function adminiRenderShops(gameMap, cameraX, cameraY, cols, rows, editState) {
 }
 
 /** Standard render: static layers or player composited view + player markers */
-export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, editState = null) {
+export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, editState = null, enemiesMap = null) {
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
 
@@ -309,6 +344,9 @@ export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, ed
   // Draw player markers
   drawPlayers(playersMap, cameraX, cameraY);
 
+  // Draw enemies
+  drawEnemies(enemiesMap, cameraX, cameraY);
+
   // Draw info point labels (always in edit mode, or when viewing statics)
   adminiRenderInfoLabels(gameMap, cameraX, cameraY, cols, rows);
 
@@ -324,7 +362,7 @@ export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, ed
 }
 
 /** Mother view: bones in white, each player's wing in their color, player markers */
-export function adminiRenderMother(motherData, cameraX, cameraY, zoom = 1) {
+export function adminiRenderMother(motherData, cameraX, cameraY, zoom = 1, enemiesMap = null) {
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
 
@@ -404,4 +442,7 @@ export function adminiRenderMother(motherData, cameraX, cameraY, zoom = 1) {
 
   // Draw player markers
   drawPlayers(motherData.players, cameraX, cameraY);
+
+  // Draw enemies
+  drawEnemies(enemiesMap, cameraX, cameraY);
 }

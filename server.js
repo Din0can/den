@@ -12,6 +12,8 @@ import { nameToColor } from './src/name-color.js';
 import { createPlayerStats, applyFlatDamage, tickBleed } from './src/stats.js';
 import { splatter as bloodSplatter, dropBlood, packCoord } from './src/blood.js';
 import { loadItemRegistry, getAllItems, getItemDef, generateContainerLoot, createItemInstance, CONTAINER_TILES, CONTAINER_CHARS, EQUIP_SLOTS, setContainerConfig, getContainerConfig, setRarityWeights, getRarityWeights } from './src/items.js';
+import { EnemyManager } from './enemy-manager.js';
+import { getEnemyTypes, updateEnemyType, loadEnemyTypes } from './src/enemy-types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -22,6 +24,7 @@ const PORT = 3000;
 
 // --- Layer setup ---
 const layerManager = new LayerManager();
+const enemyManager = new EnemyManager();
 const STATIC_LAYERS_DIR = join(__dirname, 'data', 'static-layers');
 
 // Persistence: save/load static layers to disk
@@ -158,6 +161,34 @@ async function saveRarityWeightsFile() {
   }
 }
 
+// --- Enemy types persistence ---
+const ENEMY_TYPES_FILE = join(__dirname, 'data', 'enemy-types.json');
+let enemyTypeSaveTimer = null;
+
+async function loadEnemyTypesFromDisk() {
+  try {
+    const raw = await readFile(ENEMY_TYPES_FILE, 'utf-8');
+    const data = JSON.parse(raw);
+    loadEnemyTypes(data);
+    console.log('Loaded enemy types from enemy-types.json');
+  } catch {
+    console.log('No enemy-types.json found, using defaults');
+  }
+}
+
+function debouncedEnemyTypeSave() {
+  if (enemyTypeSaveTimer) clearTimeout(enemyTypeSaveTimer);
+  enemyTypeSaveTimer = setTimeout(async () => {
+    enemyTypeSaveTimer = null;
+    try {
+      await writeFile(ENEMY_TYPES_FILE, JSON.stringify(getEnemyTypes(), null, 2));
+      console.log('Enemy types saved to disk');
+    } catch (err) {
+      console.error('Failed to save enemy types:', err);
+    }
+  }, 1000);
+}
+
 // Container state per session: "layerId:x,y" -> { items: [...], opened: true }
 const containerState = new Map();
 
@@ -167,6 +198,7 @@ await loadStaticLayers();
 await loadItems();
 await loadContainerConfig();
 await loadRarityWeights();
+await loadEnemyTypesFromDisk();
 
 if (!layerManager.getLayer(0)) {
   const L0_W = 30, L0_H = 20;
@@ -248,7 +280,7 @@ function addToInventory(player, item) {
 
 function recomputeEquipment(player) {
   let totalArmor = 0;
-  let activeDamage = 0;
+  let activeDamage = 1; // base unarmed damage
   const effects = [];
 
   for (const key of EQUIP_SLOTS) {
@@ -263,6 +295,8 @@ function recomputeEquipment(player) {
   player.totalArmor = totalArmor;
   player.activeDamage = activeDamage;
   player.equipEffects = effects;
+  player.attackRange = player.equipment.mainHand?.attackRange || 1;
+  player.attackSpeed = player.equipment.mainHand?.attackSpeed || 1000;
 }
 
 function getContainerType(layer, playerId, x, y) {
@@ -452,8 +486,11 @@ io.on('connection', (socket) => {
     inventory: Array(8).fill(null),
     equipment: createEmptyEquipment(),
     totalArmor: 0,
-    activeDamage: 0,
+    activeDamage: 1,
     equipEffects: [],
+    attackRange: 1,
+    attackSpeed: 1000,
+    lastAttackTime: 0,
   });
 
   // Build same-layer player list
@@ -478,6 +515,7 @@ io.on('connection', (socket) => {
     blood: serializeBlood(getLayerBlood(layerId)),
     inventory: p.inventory,
     equipment: p.equipment,
+    enemies: enemyManager.getSnapshotForPlayer(id, layerId),
   });
 
   socket.to(roomName).emit('playerJoined', { id, color, spawn, name: '', facing: 'south' });
@@ -684,6 +722,9 @@ io.on('connection', (socket) => {
       removeWingExit(oldLayer, id);
     }
 
+    // Despawn player's enemies on layer change (they'll respawn on new layer)
+    enemyManager.despawnForPlayer(id);
+
     // Leave old layer
     socket.leave(oldRoom);
     socket.to(oldRoom).emit('playerLeft', { id });
@@ -695,6 +736,7 @@ io.on('connection', (socket) => {
 
     // Delete old dynamic layer if now empty
     if (oldLayer && oldLayer.type === 'dynamic' && oldLayer.players.size === 0) {
+      enemyManager.despawnForLayer(oldLayerId);
       layerManager.deleteLayer(oldLayerId);
       for (const key of containerState.keys()) {
         if (key.startsWith(`${oldLayerId}:`)) containerState.delete(key);
@@ -749,6 +791,7 @@ io.on('connection', (socket) => {
       blood: serializeBlood(getLayerBlood(targetLayerId)),
       inventory: p?.inventory,
       equipment: p?.equipment,
+      enemies: enemyManager.getSnapshotForPlayer(id, targetLayerId),
     });
 
     socket.to(newRoom).emit('playerJoined', { id, color, spawn, name: p?.name || '', facing: 'south' });
@@ -1184,6 +1227,15 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Debug: set sanity (temporary, for testing enemies)
+  socket.on('debugSanity', (data) => {
+    const p = players.get(id);
+    if (!p || typeof data.sanity !== 'number') return;
+    p.stats.sanity = Math.max(0, Math.min(100, data.sanity));
+    socket.emit('damage', { stats: p.stats });
+    console.log(`[DEBUG] Player ${id} sanity set to ${p.stats.sanity}`);
+  });
+
   socket.on('disconnect', () => {
     const playerLayerId = layerManager.getPlayerLayerId(id);
     const playerLayer = layerManager.getLayer(playerLayerId);
@@ -1192,6 +1244,9 @@ io.on('connection', (socket) => {
     if (playerLayer && playerLayer.type === 'dynamic') {
       removeWingExit(playerLayer, id);
     }
+
+    // Despawn player's enemies
+    enemyManager.despawnForPlayer(id);
 
     layerManager.removePlayer(id);
     players.delete(id);
@@ -1203,6 +1258,7 @@ io.on('connection', (socket) => {
     }
     // Delete dynamic layer if now empty
     if (playerLayer && playerLayer.type === 'dynamic' && playerLayer.players.size === 0) {
+      enemyManager.despawnForLayer(playerLayerId);
       layerManager.deleteLayer(playerLayerId);
       for (const key of containerState.keys()) {
         if (key.startsWith(`${playerLayerId}:`)) containerState.delete(key);
@@ -1287,6 +1343,14 @@ adminiNs.on('connection', (socket) => {
         players: layerPlayers,
       });
     }
+
+    // Send enemy snapshot for this layer to admin
+    const layerEnemies = enemyManager.getEnemiesOnLayer(layerId).map(e => ({
+      id: e.id, type: e.type, x: e.x, y: e.y, facing: e.facing,
+      hp: e.hp, maxHp: e.maxHp, char: e.char, color: e.color,
+      name: e.name, state: e.state,
+    }));
+    socket.emit('adminEnemySnapshot', { enemies: layerEnemies });
   });
 
   // --- Editor: Create static layer ---
@@ -1619,6 +1683,33 @@ adminiNs.on('connection', (socket) => {
     socket.broadcast.emit('itemDeleted', { id: itemId });
   });
 
+  // --- Enemy types ---
+  socket.on('getEnemyTypes', () => {
+    socket.emit('enemyTypeList', getEnemyTypes());
+  });
+
+  socket.on('saveEnemyType', ({ id, ...fields }) => {
+    if (!id || typeof id !== 'string') return;
+    const allowed = ['name', 'char', 'color', 'hp', 'damage', 'armor', 'moveSpeed', 'sightRange', 'ownership', 'attackRange', 'attackSpeed', 'incorporeal'];
+    const changes = {};
+    for (const key of allowed) {
+      if (fields[key] !== undefined) {
+        if (['hp', 'damage', 'armor', 'moveSpeed', 'sightRange', 'attackRange', 'attackSpeed'].includes(key)) {
+          changes[key] = Number(fields[key]) || 0;
+        } else if (key === 'incorporeal') {
+          changes[key] = fields[key] === true || fields[key] === 'true';
+        } else {
+          changes[key] = fields[key];
+        }
+      }
+    }
+    if (!updateEnemyType(id, changes)) return;
+    debouncedEnemyTypeSave();
+    const updated = getEnemyTypes();
+    socket.emit('enemyTypeSaved', { id, type: updated[id] });
+    socket.broadcast.emit('enemyTypeSaved', { id, type: updated[id] });
+  });
+
   // --- Container config ---
   socket.on('getContainerConfig', () => {
     socket.emit('containerConfig', getContainerConfig());
@@ -1826,6 +1917,118 @@ setInterval(() => {
     io.to(`layer:${playerLayerId}`).emit('bloodUpdate', { updates });
   }
 }, 5000);
+
+// Enemy AI tick: every 200ms
+setInterval(() => {
+  const now = Date.now();
+  enemyManager.tick(players, layerManager, io, now, adminiNs, {
+    applyFlatDamage,
+    getLayerBlood,
+    dropBlood,
+    splatter: bloodSplatter,
+  });
+
+  // Player auto-attack: each player attacks nearest enemy in range
+  for (const [playerId, p] of players) {
+    if (p.activeDamage <= 0) continue;
+    if (now - p.lastAttackTime < p.attackSpeed) continue;
+
+    const playerLayerId = layerManager.getPlayerLayerId(playerId);
+    if (playerLayerId === undefined) continue;
+
+    // Get all enemies on this layer (layer-based + player-owned)
+    const layerEnemies = enemyManager.getEnemiesOnLayer(playerLayerId);
+    const ownerEnemies = [];
+    const ownerSet = enemyManager.byOwner.get(playerId);
+    if (ownerSet) {
+      for (const eid of ownerSet) {
+        const e = enemyManager.enemies.get(eid);
+        if (e && e.layerId === playerLayerId) ownerEnemies.push(e);
+      }
+    }
+
+    // Combine and find closest in range
+    const allEnemies = [...layerEnemies.filter(e => e.ownerType === 'layer'), ...ownerEnemies];
+    let closest = null;
+    let closestDist = Infinity;
+    for (const e of allEnemies) {
+      const d = Math.abs(e.x - p.x) + Math.abs(e.y - p.y);
+      if (d <= p.attackRange && d < closestDist) {
+        closest = e;
+        closestDist = d;
+      }
+    }
+
+    if (!closest) continue;
+
+    // Apply damage
+    const reducedDamage = Math.max(1, p.activeDamage - closest.armor);
+    closest.hp -= reducedDamage;
+    closest.bleedStacks += Math.floor(reducedDamage / 5);
+
+    // Face player toward enemy
+    const dx = closest.x - p.x;
+    const dy = closest.y - p.y;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      p.facing = dx > 0 ? 'east' : 'west';
+    } else {
+      p.facing = dy > 0 ? 'south' : 'north';
+    }
+    p.lastAttackTime = now;
+
+    // Generate blood at enemy position
+    const blood = getLayerBlood(playerLayerId);
+    const bloodUpdate = bloodSplatter(blood, closest.x, closest.y, 1);
+    io.to(`layer:${playerLayerId}`).emit('bloodUpdate', { updates: [bloodUpdate] });
+
+    // Emit attack event to player
+    const sock = io.sockets.sockets.get(playerId);
+    if (sock) {
+      sock.emit('playerAttack', {
+        enemyId: closest.id,
+        damage: reducedDamage,
+        enemyHp: closest.hp,
+        enemyMaxHp: closest.maxHp,
+      });
+      // Also broadcast facing change
+      sock.to(`layer:${playerLayerId}`).emit('playerState', { id: playerId, facing: p.facing });
+    }
+
+    // Kill enemy if dead
+    if (closest.hp <= 0) {
+      io.to(`layer:${playerLayerId}`).emit('enemyDied', { enemyId: closest.id, x: closest.x, y: closest.y });
+      enemyManager.killEnemy(closest.id);
+    }
+  }
+}, 200);
+
+// Enemy bleed tick: every 2s
+setInterval(() => {
+  const toKill = [];
+  for (const [eid, enemy] of enemyManager.enemies) {
+    if (enemy.bleedStacks <= 0) continue;
+    enemy.hp -= enemy.bleedStacks * 0.2;
+
+    // Generate blood
+    const blood = getLayerBlood(enemy.layerId);
+    const bloodUpdate = dropBlood(blood, enemy.x, enemy.y);
+    io.to(`layer:${enemy.layerId}`).emit('bloodUpdate', { updates: [bloodUpdate] });
+
+    if (enemy.hp <= 0) {
+      io.to(`layer:${enemy.layerId}`).emit('enemyDied', { enemyId: enemy.id, x: enemy.x, y: enemy.y });
+      toKill.push(enemy.id);
+    } else {
+      // Broadcast HP update to layer
+      io.to(`layer:${enemy.layerId}`).emit('enemyHpUpdate', {
+        id: enemy.id,
+        hp: enemy.hp,
+        maxHp: enemy.maxHp,
+        bleedStacks: enemy.bleedStacks,
+      });
+    }
+  }
+  for (const eid of toKill) enemyManager.killEnemy(eid);
+}, 2000);
 
 http.listen(PORT, () => {
   console.log(`Den server running on http://localhost:${PORT}`);

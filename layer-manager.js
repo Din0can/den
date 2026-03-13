@@ -453,27 +453,30 @@ export class DynamicLayer {
     return TILE_VOID;
   }
 
-  /** Get composited tile for a specific player (bone wins over wing) */
+  /** Get composited tile for a specific player (same rule as compositeChunk) */
   getCompositedTile(playerId, x, y) {
     const { cx, cy, lx, ly } = worldToChunk(x, y);
     const key = chunkKey(cx, cy);
     const idx = chunkIndex(lx, ly);
 
-    // Bone tile takes priority
     const bone = this.bones.get(key);
-    if (bone) {
-      const t = bone.tiles[idx];
-      if (t !== TILE_VOID) return t;
-    }
+    const boneTile = bone ? bone.tiles[idx] : TILE_VOID;
 
-    // Fall back to player's wing
+    // Sacred bone tiles always win (shared structure)
+    if (BONE_SACRED.has(boneTile)) return boneTile;
+
+    // Wing can override non-sacred bone tiles (walls/void)
     const pd = this.playerDungeons.get(playerId);
     if (pd) {
       const wing = pd.chunks.get(key);
-      if (wing) return wing.tiles[idx];
+      if (wing) {
+        const wingTile = wing.tiles[idx];
+        if (wingTile !== TILE_VOID) return wingTile;
+      }
     }
 
-    return TILE_VOID;
+    // Fall back to bone tile
+    return boneTile;
   }
 
   setTile(x, y, tile) {

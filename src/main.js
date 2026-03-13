@@ -40,6 +40,7 @@ const camera = new Camera();
 const fog = new Fog();
 let localEntity = null;
 const remotePlayers = new Map();
+const enemies = new Map(); // id -> { id, type, x, y, facing, hp, maxHp, char, color, name, state, stateTime }
 let lastMoveTime = 0;
 let playerName = '';
 let connected = false;
@@ -55,6 +56,9 @@ let shopCtx;
 // Container result message
 let containerMsg = null;
 let containerMsgTime = 0;
+
+// Combat visual effects
+const combatEffects = []; // { type, entityType, entityId, startTime, duration, text, color, x, y, dx, dy }
 
 // Containers the local player has already opened (cleared on layer change)
 const openedContainers = new Set();
@@ -190,6 +194,14 @@ function init() {
       remotePlayers.set(p.id, new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south'));
     }
 
+    // Load enemy snapshot
+    enemies.clear();
+    if (data.enemies) {
+      for (const e of data.enemies) {
+        enemies.set(e.id, { ...e, stateTime: performance.now() });
+      }
+    }
+
     // Send name to server to trigger color computation
     network.sendName(playerName);
 
@@ -237,6 +249,13 @@ function init() {
     if (data.players) {
       for (const p of data.players) {
         remotePlayers.set(p.id, new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south'));
+      }
+    }
+    // Load enemy snapshot for new layer
+    enemies.clear();
+    if (data.enemies) {
+      for (const e of data.enemies) {
+        enemies.set(e.id, { ...e, stateTime: performance.now() });
       }
     }
     if (data.spawn && localEntity) {
@@ -338,6 +357,139 @@ function init() {
     }
   });
 
+  network.onEnemyUpdate((data) => {
+    if (data.spawned) {
+      for (const e of data.spawned) {
+        enemies.set(e.id, { ...e, stateTime: performance.now() });
+      }
+    }
+    if (data.moved) {
+      for (const m of data.moved) {
+        const e = enemies.get(m.id);
+        if (e) {
+          e.x = m.x;
+          e.y = m.y;
+          e.facing = m.facing;
+        }
+      }
+    }
+    if (data.stateChanged) {
+      for (const s of data.stateChanged) {
+        const e = enemies.get(s.id);
+        if (e) {
+          e.state = s.state;
+          e.stateTime = performance.now();
+        }
+      }
+    }
+    if (data.despawned) {
+      for (const id of data.despawned) {
+        enemies.delete(id);
+      }
+    }
+  });
+
+  // --- Combat event handlers ---
+
+  network.onCombatHit((data) => {
+    // Enemy struck the player
+    if (data.stats) localStats = data.stats;
+    const enemy = enemies.get(data.enemyId);
+    const now = performance.now();
+
+    if (enemy && localEntity) {
+      // Wiggle effect on attacking enemy (toward player)
+      combatEffects.push({
+        type: 'wiggle', entityType: 'enemy', entityId: data.enemyId,
+        startTime: now, duration: 200,
+        dx: localEntity.x - enemy.x, dy: localEntity.y - enemy.y,
+      });
+      // Red blink on player
+      combatEffects.push({
+        type: 'blink', entityType: 'player', entityId: null,
+        startTime: now, duration: 200,
+      });
+    }
+
+    // Floating damage text above player
+    if (localEntity) {
+      combatEffects.push({
+        type: 'floatText', entityType: 'player', entityId: null,
+        startTime: now, duration: 1500,
+        text: `-${data.damage}`, color: '#ff4444',
+        x: localEntity.x, y: localEntity.y,
+      });
+      if (data.bleedAdded) {
+        combatEffects.push({
+          type: 'floatText', entityType: 'player', entityId: null,
+          startTime: now, duration: 1500,
+          text: 'Bleed!', color: '#aa2222',
+          x: localEntity.x, y: localEntity.y,
+        });
+      }
+    }
+  });
+
+  network.onPlayerAttack((data) => {
+    const enemy = enemies.get(data.enemyId);
+    const now = performance.now();
+
+    if (enemy) {
+      // Wiggle effect on local player (toward enemy)
+      combatEffects.push({
+        type: 'wiggle', entityType: 'player', entityId: null,
+        startTime: now, duration: 200,
+        dx: enemy.x - (localEntity?.x || 0), dy: enemy.y - (localEntity?.y || 0),
+      });
+      // Red blink on target enemy
+      combatEffects.push({
+        type: 'blink', entityType: 'enemy', entityId: data.enemyId,
+        startTime: now, duration: 200,
+      });
+      // Floating damage text above enemy
+      combatEffects.push({
+        type: 'floatText', entityType: 'enemy', entityId: data.enemyId,
+        startTime: now, duration: 1500,
+        text: `-${data.damage}`, color: '#ffcc44',
+        x: enemy.x, y: enemy.y,
+      });
+      // Update enemy HP locally
+      enemy.hp = data.enemyHp;
+      enemy.maxHp = data.enemyMaxHp;
+    }
+  });
+
+  network.onEnemyDied((data) => {
+    const enemy = enemies.get(data.enemyId);
+    const now = performance.now();
+    const x = enemy ? enemy.x : data.x;
+    const y = enemy ? enemy.y : data.y;
+    combatEffects.push({
+      type: 'floatText', entityType: 'enemy', entityId: data.enemyId,
+      startTime: now, duration: 1500,
+      text: 'Killed!', color: '#ff8844',
+      x, y,
+    });
+    enemies.delete(data.enemyId);
+  });
+
+  network.onEnemyHpUpdate((data) => {
+    const enemy = enemies.get(data.id);
+    if (enemy) {
+      enemy.hp = data.hp;
+      enemy.maxHp = data.maxHp;
+      enemy.bleedStacks = data.bleedStacks;
+    }
+  });
+
+  // Debug: F9 toggles sanity between 10 and 100 (for testing enemies)
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'F9') {
+      const newSanity = (localStats?.sanity ?? 100) > 50 ? 10 : 100;
+      network.sendDebugSanity(newSanity);
+    }
+  });
+
   initCRT(gameLoop);
 }
 
@@ -355,7 +507,15 @@ function gameLoop(now) {
 
     const nx = localEntity.x + dir.dx;
     const ny = localEntity.y + dir.dy;
-    if (gameMap.isPassable(nx, ny)) {
+    // Check enemy collision (all enemies block player movement)
+    let enemyBlocking = false;
+    for (const [, enemy] of enemies) {
+      if (enemy.x === nx && enemy.y === ny) {
+        enemyBlocking = true;
+        break;
+      }
+    }
+    if (gameMap.isPassable(nx, ny) && !enemyBlocking) {
       localEntity.x = nx;
       localEntity.y = ny;
       lastMoveTime = now;
@@ -494,8 +654,15 @@ function gameLoop(now) {
     destroyShopInput();
   }
 
+  // Cleanup expired combat effects
+  for (let i = combatEffects.length - 1; i >= 0; i--) {
+    if (now - combatEffects[i].startTime >= combatEffects[i].duration) {
+      combatEffects.splice(i, 1);
+    }
+  }
+
   // Render
-  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos, facingContainer, containerFloatMsg, facingShop);
+  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos, facingContainer, containerFloatMsg, facingShop, enemies, combatEffects);
   renderHud(hudInfo);
 }
 

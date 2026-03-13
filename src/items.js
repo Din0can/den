@@ -90,6 +90,8 @@ export function createItemInstance(def) {
     slot: def.slot || null,
     armor: def.armor || 0,
     damage: def.damage || 0,
+    attackRange: def.attackRange || 0,
+    attackSpeed: def.attackSpeed || 0,
     twoHanded: def.twoHanded || false,
     effect: def.effect || null,
     stackable: def.stackable || false,

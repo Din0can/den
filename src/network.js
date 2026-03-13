@@ -33,6 +33,11 @@ export function connect() {
   socket.on('containerResult', (data) => handlers.onContainerResult?.(data));
   socket.on('shopData', (data) => handlers.onShopData?.(data));
   socket.on('shopResult', (data) => handlers.onShopResult?.(data));
+  socket.on('enemyUpdate', (data) => handlers.onEnemyUpdate?.(data));
+  socket.on('combatHit', (data) => handlers.onCombatHit?.(data));
+  socket.on('playerAttack', (data) => handlers.onPlayerAttack?.(data));
+  socket.on('enemyDied', (data) => handlers.onEnemyDied?.(data));
+  socket.on('enemyHpUpdate', (data) => handlers.onEnemyHpUpdate?.(data));
 
   socket.on('connect', () => console.log('Connected:', socket.id));
   socket.on('disconnect', () => console.log('Disconnected'));
@@ -51,6 +56,11 @@ export function onInventoryUpdate(fn) { handlers.onInventoryUpdate = fn; }
 export function onContainerResult(fn) { handlers.onContainerResult = fn; }
 export function onShopData(fn) { handlers.onShopData = fn; }
 export function onShopResult(fn) { handlers.onShopResult = fn; }
+export function onEnemyUpdate(fn) { handlers.onEnemyUpdate = fn; }
+export function onCombatHit(fn) { handlers.onCombatHit = fn; }
+export function onPlayerAttack(fn) { handlers.onPlayerAttack = fn; }
+export function onEnemyDied(fn) { handlers.onEnemyDied = fn; }
+export function onEnemyHpUpdate(fn) { handlers.onEnemyHpUpdate = fn; }
 
 export function sendState(x, y, facing) {
   if (!socket) return;
@@ -129,6 +139,11 @@ export function sendCloseShop() {
   socket.emit('closeShop');
 }
 
+
+export function sendDebugSanity(sanity) {
+  if (!socket) return;
+  socket.emit('debugSanity', { sanity });
+}
 
 export function getId() {
   return socket?.id;

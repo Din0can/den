@@ -89,7 +89,7 @@ function drawDoor(px, py, door) {
   }
 }
 
-export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos, showLootPrompt, containerFloatMsg, showShopPrompt) {
+export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos, showLootPrompt, containerFloatMsg, showShopPrompt, enemies, combatEffects) {
   const entityArray = Array.from(entities);
   const viewRows = viewport.rows;
 
@@ -180,6 +180,72 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
     }
   }
 
+  // Draw enemies — only if visible in FOV
+  const now = performance.now();
+  if (enemies) {
+    for (const [, enemy] of enemies) {
+      if (!gameMap.isVisible(enemy.x, enemy.y)) continue;
+
+      let sx = (enemy.x - camera.x) * TILE_SIZE;
+      let sy = (enemy.y - camera.y) * TILE_SIZE;
+      if (sx < -TILE_SIZE || sx >= viewport.gameWidth || sy < -TILE_SIZE || sy >= viewRows * TILE_SIZE) continue;
+
+      // Apply wiggle offset for combat effects
+      if (combatEffects) {
+        for (const fx of combatEffects) {
+          if (fx.type === 'wiggle' && fx.entityType === 'enemy' && fx.entityId === enemy.id) {
+            const t = (now - fx.startTime) / fx.duration;
+            const offset = Math.sin(t * Math.PI) * 4;
+            const len = Math.sqrt(fx.dx * fx.dx + fx.dy * fx.dy) || 1;
+            sx += (fx.dx / len) * offset;
+            sy += (fx.dy / len) * offset;
+          }
+        }
+      }
+
+      ctx.font = FONT;
+      drawRotatedChar(enemy.char, sx, sy, enemy.color, enemy.facing);
+
+      // Red blink overlay for combat
+      if (combatEffects) {
+        for (const fx of combatEffects) {
+          if (fx.type === 'blink' && fx.entityType === 'enemy' && fx.entityId === enemy.id) {
+            const t = (now - fx.startTime) / fx.duration;
+            ctx.fillStyle = `rgba(255, 0, 0, ${(1 - t) * 0.5})`;
+            ctx.fillRect(sx, sy, TILE_SIZE, TILE_SIZE);
+          }
+        }
+      }
+
+      // "!" alert indicator (yellow, above enemy) for 800ms
+      if (enemy.state === 'alert') {
+        const elapsed = now - (enemy.stateTime || 0);
+        if (elapsed < 800) {
+          ctx.font = `bold ${FONT_SIZE + 2}px 'JetBrains Mono', monospace`;
+          ctx.fillStyle = '#ffff00';
+          const tw = ctx.measureText('!').width;
+          ctx.fillText('!', sx + TILE_SIZE / 2 - tw / 2, sy - 10);
+          ctx.font = FONT;
+        }
+      }
+
+      // HP bar below enemy (small, 2px tall)
+      if (enemy.hp < enemy.maxHp) {
+        const barW = TILE_SIZE - 4;
+        const barH = 2;
+        const barX = sx + 2;
+        const barY = sy + TILE_SIZE - 1;
+        const ratio = Math.max(0, enemy.hp / enemy.maxHp);
+        // Background
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(barX, barY, barW, barH);
+        // Fill
+        ctx.fillStyle = ratio > 0.5 ? '#44aa44' : ratio > 0.25 ? '#aaaa44' : '#aa4444';
+        ctx.fillRect(barX, barY, barW * ratio, barH);
+      }
+    }
+  }
+
   // Draw shopkeepers
   for (const shop of gameMap._allShops) {
     const vis = gameMap.isVisible(shop.x, shop.y);
@@ -203,9 +269,34 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
 
   // Draw local player (always visible)
   if (localEntity) {
-    const sx = (localEntity.x - camera.x) * TILE_SIZE;
-    const sy = (localEntity.y - camera.y) * TILE_SIZE;
+    let sx = (localEntity.x - camera.x) * TILE_SIZE;
+    let sy = (localEntity.y - camera.y) * TILE_SIZE;
+
+    // Apply wiggle offset for combat
+    if (combatEffects) {
+      for (const fx of combatEffects) {
+        if (fx.type === 'wiggle' && fx.entityType === 'player') {
+          const t = (now - fx.startTime) / fx.duration;
+          const offset = Math.sin(t * Math.PI) * 4;
+          const len = Math.sqrt(fx.dx * fx.dx + fx.dy * fx.dy) || 1;
+          sx += (fx.dx / len) * offset;
+          sy += (fx.dy / len) * offset;
+        }
+      }
+    }
+
     drawRotatedChar(localEntity.char, sx, sy, localEntity.color, localEntity.facing);
+
+    // Red blink overlay for combat
+    if (combatEffects) {
+      for (const fx of combatEffects) {
+        if (fx.type === 'blink' && fx.entityType === 'player') {
+          const t = (now - fx.startTime) / fx.duration;
+          ctx.fillStyle = `rgba(255, 0, 0, ${(1 - t) * 0.5})`;
+          ctx.fillRect(sx, sy, TILE_SIZE, TILE_SIZE);
+        }
+      }
+    }
   }
 
   // Apply smooth fog overlay
@@ -248,6 +339,24 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
       if (sx < -TILE_SIZE || sx >= viewport.gameWidth || sy < -TILE_SIZE || sy >= viewRows * TILE_SIZE) continue;
       ctx.fillStyle = '#FF6600';
       ctx.fillText('¥', sx + 2, sy + 1);
+    }
+
+    // Draw enemies near torches (even if not in player FOV)
+    if (enemies) {
+      for (const [, enemy] of enemies) {
+        if (gameMap.isVisible(enemy.x, enemy.y)) continue;
+        let nearTorch = false;
+        for (let j = 0; j < torchCount; j++) {
+          const dx = enemy.x - _torchXs[j], dy = enemy.y - _torchYs[j];
+          if (dx * dx + dy * dy <= TORCH_VISION_RADIUS * TORCH_VISION_RADIUS) { nearTorch = true; break; }
+        }
+        if (!nearTorch) continue;
+        const esx = (enemy.x - camera.x) * TILE_SIZE;
+        const esy = (enemy.y - camera.y) * TILE_SIZE;
+        if (esx < -TILE_SIZE || esx >= viewport.gameWidth || esy < -TILE_SIZE || esy >= viewRows * TILE_SIZE) continue;
+        ctx.font = FONT;
+        drawRotatedChar(enemy.char, esx, esy, enemy.color, enemy.facing);
+      }
     }
 
     // Draw entities near torches (even if not in player FOV)
@@ -351,6 +460,28 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
     ctx.fillRect(px - 5, py - 2, tw + 10, 14);
     ctx.fillStyle = '#ddcc88';
     ctx.fillText(containerFloatMsg, px, py);
+    ctx.font = FONT;
+  }
+
+  // Floating combat text
+  if (combatEffects) {
+    ctx.font = `bold ${FONT_SIZE - 2}px 'JetBrains Mono', monospace`;
+    ctx.textBaseline = 'top';
+    let floatIndex = 0;
+    for (const fx of combatEffects) {
+      if (fx.type !== 'floatText') continue;
+      const t = (now - fx.startTime) / fx.duration;
+      const worldX = (fx.x - camera.x) * TILE_SIZE + TILE_SIZE / 2;
+      const worldY = (fx.y - camera.y) * TILE_SIZE;
+      const offsetY = -24 * t - floatIndex * 14;
+      const alpha = Math.max(0, 1 - t);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = fx.color;
+      const tw = ctx.measureText(fx.text).width;
+      ctx.fillText(fx.text, worldX - tw / 2, worldY + offsetY);
+      floatIndex++;
+    }
+    ctx.globalAlpha = 1;
     ctx.font = FONT;
   }
 
