@@ -3,7 +3,7 @@ import { GameMap } from './game-map.js';
 import { CHUNK_SIZE, chunkKey } from './chunk.js';
 import { TILE_SIZE, TILE, TILE_META } from './config.js';
 import { initAdminiRenderer, adminiRender, adminiRenderMother } from './admini-renderer.js';
-import { initSpriteCache, SPRITE_CATALOG, renderSpriteToElement, getSpriteCanvas } from './sprites.js';
+import { initSpriteCache, SPRITE_CATALOG, renderSpriteToElement, getSpriteCanvas, drawEntitySprite } from './sprites.js';
 
 const canvas = document.getElementById('admin-canvas');
 const layerListEl = document.getElementById('layer-list');
@@ -1571,7 +1571,7 @@ function renderEnemyList() {
     card.dataset.id = id;
     card.innerHTML = `
       <div class="enemy-card-header">
-        <span class="enemy-card-char" style="color:${t.color}">${t.char}</span>
+        <canvas class="enemy-card-sprite" width="24" height="24" style="width:24px;height:24px;image-rendering:pixelated;flex-shrink:0;"></canvas>
         <strong>${t.name}</strong>
         <span style="color:#666;font-size:10px">(${id})</span>
       </div>
@@ -1621,6 +1621,13 @@ function renderEnemyList() {
       </div>
       <button class="btn-save-enemy">Save</button>
     `;
+    // Render entity sprite preview
+    const spriteCanvas = card.querySelector('.enemy-card-sprite');
+    if (spriteCanvas) {
+      const sprCtx = spriteCanvas.getContext('2d');
+      sprCtx.clearRect(0, 0, 24, 24);
+      drawEntitySprite(sprCtx, `entity_${id}_s`, t.color, 12, 12, 24);
+    }
     card.querySelector('.btn-save-enemy').addEventListener('click', () => {
       const fields = {};
       for (const input of card.querySelectorAll('input, select')) {

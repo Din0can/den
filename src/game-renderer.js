@@ -1,6 +1,6 @@
 import { TILE_SIZE, TILE, TILE_META, COLORS, TORCH_VISION_RADIUS } from './config.js';
 import { viewport } from './viewport.js';
-import { drawSprite } from './sprites.js';
+import { drawSprite, drawEntitySprite } from './sprites.js';
 
 let ctx;
 const FONT_SIZE = TILE_SIZE;
@@ -81,6 +81,36 @@ function resolveColor(color, px, py, h) {
     }
   }
   return color;
+}
+
+/** Draw an entity with directional sprite (fallback to char) */
+function drawEntity(spriteBase, char, px, py, color, facing) {
+  if (!spriteBase) { drawRotatedChar(char, px, py, color, facing); return; }
+
+  const baseColor = typeof color === 'string' && color.startsWith('gradient:') ? color.slice(9).split(':')[0] : color;
+  const cx = px + TILE_SIZE / 2;
+  const cy = py + TILE_SIZE / 2;
+
+  // Pick directional suffix
+  const suffix = facing === 'north' ? '_n' : facing === 'east' ? '_e' : facing === 'west' ? '_e' : '_s';
+  const spriteName = spriteBase + suffix;
+
+  if (facing === 'west') {
+    // Horizontal flip for west (draw east sprite mirrored)
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(-1, 1);
+    if (drawEntitySprite(ctx, spriteName, baseColor, 0, 0, TILE_SIZE)) {
+      ctx.restore();
+      return;
+    }
+    ctx.restore();
+  } else {
+    if (drawEntitySprite(ctx, spriteName, baseColor, cx, cy, TILE_SIZE)) return;
+  }
+
+  // Fallback to char
+  drawRotatedChar(char, px, py, color, facing);
 }
 
 /** Draw a character rotated based on facing direction */
@@ -253,7 +283,7 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
       }
 
       ctx.font = FONT;
-      drawRotatedChar(enemy.char, sx, sy, enemy.color, enemy.facing);
+      drawEntity(enemy.type ? `entity_${enemy.type}` : null, enemy.char, sx, sy, enemy.color, enemy.facing);
 
       // Red blink overlay for combat
       if (combatEffects) {
@@ -404,7 +434,7 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
         const esy = (enemy.y - camera.y) * TILE_SIZE;
         if (esx < -TILE_SIZE || esx >= viewport.gameWidth || esy < -TILE_SIZE || esy >= viewRows * TILE_SIZE) continue;
         ctx.font = FONT;
-        drawRotatedChar(enemy.char, esx, esy, enemy.color, enemy.facing);
+        drawEntity(enemy.type ? `entity_${enemy.type}` : null, enemy.char, esx, esy, enemy.color, enemy.facing);
       }
     }
 
@@ -479,7 +509,7 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
           const esy = (enemy.y - camera.y) * TILE_SIZE;
           if (esx < -TILE_SIZE || esx >= viewport.gameWidth || esy < -TILE_SIZE || esy >= viewRows * TILE_SIZE) continue;
           ctx.font = FONT;
-          drawRotatedChar(enemy.char, esx, esy, enemy.color, enemy.facing);
+          drawEntity(enemy.type ? `entity_${enemy.type}` : null, enemy.char, esx, esy, enemy.color, enemy.facing);
         }
       }
 

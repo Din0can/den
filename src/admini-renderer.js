@@ -1,6 +1,6 @@
 import { TILE_SIZE, TILE, TILE_META, COLORS } from './config.js';
 import { CHUNK_SIZE, chunkKey, chunkIndex } from './chunk.js';
-import { drawSprite } from './sprites.js';
+import { drawSprite, drawEntitySprite } from './sprites.js';
 
 const RARITY_COLORS = { common: '#888888', uncommon: '#5a8a5a', rare: '#4a7a9a', epic: '#7a5a8a', legendary: '#9a7a3a' };
 
@@ -109,9 +109,12 @@ function drawEnemies(enemiesMap, cameraX, cameraY) {
     const px = (e.x - cameraX) * TILE_SIZE;
     const py = (e.y - cameraY) * TILE_SIZE;
 
-    // Draw character
-    ctx.fillStyle = e.color || '#aa4444';
-    ctx.fillText(e.char || '?', px + 2, py + 1);
+    // Draw enemy sprite (fallback to char)
+    const eSprName = e.type ? `entity_${e.type}_s` : null;
+    if (!eSprName || !drawEntitySprite(ctx, eSprName, e.color || '#aa4444', px + TILE_SIZE / 2, py + TILE_SIZE / 2, TILE_SIZE)) {
+      ctx.fillStyle = e.color || '#aa4444';
+      ctx.fillText(e.char || '?', px + 2, py + 1);
+    }
 
     // State indicator above
     if (e.state === 'alert') {

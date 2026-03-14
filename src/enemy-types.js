@@ -3,14 +3,14 @@
 export const MAX_ENEMIES_PER_LAYER = 30;
 
 export const ENEMY_TYPES = {
-  rat:      { char: 'r', color: '#8a6a4a', name: 'Rat',      hp: 10,  damage: 2,  armor: 0, moveSpeed: 350, sightRange: 5,  ownership: 'player', attackRange: 1, attackSpeed: 800,  incorporeal: false, behavior: 'cowardly',   minLayer: 1 },
-  spider:   { char: 's', color: '#5a5a5a', name: 'Spider',   hp: 20,  damage: 5,  armor: 1, moveSpeed: 450, sightRange: 6,  ownership: 'player', attackRange: 1, attackSpeed: 1000, incorporeal: false, behavior: 'default',    minLayer: 1 },
-  crawler:  { char: 'c', color: '#6a5a3a', name: 'Crawler',  hp: 30,  damage: 4,  armor: 3, moveSpeed: 500, sightRange: 5,  ownership: 'player', attackRange: 1, attackSpeed: 1200, incorporeal: false, behavior: 'patrol',     minLayer: 2 },
-  stalker:  { char: 'K', color: '#2a3a2a', name: 'Stalker',  hp: 35,  damage: 8,  armor: 2, moveSpeed: 300, sightRange: 10, ownership: 'layer',  attackRange: 1, attackSpeed: 900,  incorporeal: false, behavior: 'ambush',     minLayer: 4 },
-  shadow:   { char: 'S', color: '#3a2a4a', name: 'Shadow',   hp: 40,  damage: 10, armor: 3, moveSpeed: 300, sightRange: 8,  ownership: 'layer',  attackRange: 1, attackSpeed: 1200, incorporeal: true,  behavior: 'hitAndRun',  minLayer: 5 },
-  wraith:   { char: 'W', color: '#4a4a6a', name: 'Wraith',   hp: 25,  damage: 12, armor: 0, moveSpeed: 250, sightRange: 8,  ownership: 'layer',  attackRange: 1, attackSpeed: 700,  incorporeal: true,  behavior: 'hitAndRun',  minLayer: 6 },
-  horror:   { char: 'H', color: '#4a1a1a', name: 'Horror',   hp: 80,  damage: 20, armor: 5, moveSpeed: 250, sightRange: 10, ownership: 'layer',  attackRange: 1, attackSpeed: 1500, incorporeal: true,  behavior: 'relentless', minLayer: 8 },
-  devourer: { char: 'D', color: '#5a1a2a', name: 'Devourer', hp: 120, damage: 15, armor: 6, moveSpeed: 400, sightRange: 12, ownership: 'layer',  attackRange: 1, attackSpeed: 1400, incorporeal: false, behavior: 'relentless', minLayer: 8 },
+  rat:      { char: 'r', color: '#8a6a4a', name: 'Rat',      hp: 10,  damage: 2,  armor: 0, moveSpeed: 350, sightRange: 5,  ownership: 'player', attackRange: 1, attackSpeed: 800,  incorporeal: false, behavior: 'cowardly',   minLayer: 1, sprite: 'entity_rat' },
+  spider:   { char: 's', color: '#5a5a5a', name: 'Spider',   hp: 20,  damage: 5,  armor: 1, moveSpeed: 450, sightRange: 6,  ownership: 'player', attackRange: 1, attackSpeed: 1000, incorporeal: false, behavior: 'default',    minLayer: 1, sprite: 'entity_spider' },
+  crawler:  { char: 'c', color: '#6a5a3a', name: 'Crawler',  hp: 30,  damage: 4,  armor: 3, moveSpeed: 500, sightRange: 5,  ownership: 'player', attackRange: 1, attackSpeed: 1200, incorporeal: false, behavior: 'patrol',     minLayer: 2, sprite: 'entity_crawler' },
+  stalker:  { char: 'K', color: '#2a3a2a', name: 'Stalker',  hp: 35,  damage: 8,  armor: 2, moveSpeed: 300, sightRange: 10, ownership: 'layer',  attackRange: 1, attackSpeed: 900,  incorporeal: false, behavior: 'ambush',     minLayer: 4, sprite: 'entity_stalker' },
+  shadow:   { char: 'S', color: '#3a2a4a', name: 'Shadow',   hp: 40,  damage: 10, armor: 3, moveSpeed: 300, sightRange: 8,  ownership: 'layer',  attackRange: 1, attackSpeed: 1200, incorporeal: true,  behavior: 'hitAndRun',  minLayer: 5, sprite: 'entity_shadow' },
+  wraith:   { char: 'W', color: '#4a4a6a', name: 'Wraith',   hp: 25,  damage: 12, armor: 0, moveSpeed: 250, sightRange: 8,  ownership: 'layer',  attackRange: 1, attackSpeed: 700,  incorporeal: true,  behavior: 'hitAndRun',  minLayer: 6, sprite: 'entity_wraith' },
+  horror:   { char: 'H', color: '#4a1a1a', name: 'Horror',   hp: 80,  damage: 20, armor: 5, moveSpeed: 250, sightRange: 10, ownership: 'layer',  attackRange: 1, attackSpeed: 1500, incorporeal: true,  behavior: 'relentless', minLayer: 8, sprite: 'entity_horror' },
+  devourer: { char: 'D', color: '#5a1a2a', name: 'Devourer', hp: 120, damage: 15, armor: 6, moveSpeed: 400, sightRange: 12, ownership: 'layer',  attackRange: 1, attackSpeed: 1400, incorporeal: false, behavior: 'relentless', minLayer: 8, sprite: 'entity_devourer' },
 };
 
 // All enemy type IDs for bracket reference
