@@ -184,6 +184,7 @@ const socket = io('/admini', { transports: ['websocket'] });
 
 socket.on('connect', () => {
   socket.emit('getLayers');
+  socket.emit('getItems');
 });
 
 socket.on('layerList', (layers) => {
@@ -458,6 +459,16 @@ function centerCamera(bounds) {
 }
 
 function renderSidebar() {
+  // Save give-panel state before rebuild
+  let activeGivePlayerId = null;
+  let activeGiveItemId = null;
+  const existingPanel = document.querySelector('.give-panel');
+  if (existingPanel) {
+    const sel = existingPanel.querySelector('select');
+    activeGiveItemId = sel?.value || null;
+    activeGivePlayerId = existingPanel.closest('li')?._givePlayerId || null;
+  }
+
   layerListEl.innerHTML = '';
   for (const layer of cachedLayers) {
     const li = document.createElement('li');
@@ -508,16 +519,42 @@ function renderSidebar() {
       loadLayerView(layer);
     });
 
+    // Drag-to-teleport: allow dropping players on layer headers
+    li.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      li.style.background = '#2a3a2a';
+    });
+    li.addEventListener('dragleave', () => {
+      li.style.background = '';
+    });
+    li.addEventListener('drop', (e) => {
+      e.preventDefault();
+      li.style.background = '';
+      const playerId = e.dataTransfer.getData('text/plain');
+      if (playerId) {
+        socket.emit('adminTeleport', { playerId, targetLayerId: layer.id });
+      }
+    });
+
     // Player names under dynamic layers
     if (layer.players && layer.players.length > 0) {
       const playerUl = document.createElement('ul');
       playerUl.className = 'player-list';
       for (const p of layer.players) {
         const pLi = document.createElement('li');
+        pLi._givePlayerId = p.id;
         if (activeLayerId === layer.id && viewMode === 'player' && activePlayerId === p.id) {
           pLi.classList.add('active');
         }
         pLi.style.color = p.color || '#888';
+
+        // Drag-to-teleport: make player draggable
+        pLi.draggable = true;
+        pLi.addEventListener('dragstart', (e) => {
+          e.dataTransfer.setData('text/plain', p.id);
+          e.dataTransfer.effectAllowed = 'move';
+        });
 
         const dot = document.createElement('span');
         dot.className = 'player-dot';
@@ -528,8 +565,50 @@ function renderSidebar() {
         nameSpan.textContent = p.name || p.id.slice(0, 8);
         pLi.appendChild(nameSpan);
 
+        // Give item button
+        const giveBtn = document.createElement('button');
+        giveBtn.textContent = 'Give';
+        giveBtn.className = 'edit-btn';
+        giveBtn.style.cssText = 'margin-left:auto;font-size:9px;padding:1px 4px;';
+        giveBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          // Toggle give panel
+          const existing = pLi.querySelector('.give-panel');
+          if (existing) { existing.remove(); return; }
+          const panel = document.createElement('div');
+          panel.className = 'give-panel';
+          panel.style.cssText = 'width:100%;display:flex;gap:4px;align-items:center;margin-top:4px;';
+          panel.addEventListener('click', (ev) => ev.stopPropagation());
+          const sel = document.createElement('select');
+          sel.style.cssText = 'font-size:10px;background:#222;color:#ccc;border:1px solid #444;flex:1;min-width:0;';
+          for (const [id, item] of Object.entries(cachedItems)) {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = item.name || id;
+            sel.appendChild(opt);
+          }
+          const goBtn = document.createElement('button');
+          goBtn.textContent = 'Give';
+          goBtn.className = 'edit-btn';
+          goBtn.style.cssText = 'font-size:9px;padding:2px 6px;flex-shrink:0;';
+          const msg = document.createElement('span');
+          msg.style.cssText = 'font-size:9px;color:#888;flex-shrink:0;';
+          goBtn.addEventListener('click', () => {
+            if (!sel.value) return;
+            socket.emit('giveItem', { playerId: p.id, itemId: sel.value });
+          });
+          panel.appendChild(sel);
+          panel.appendChild(goBtn);
+          panel.appendChild(msg);
+          pLi.appendChild(panel);
+          pLi._giveMsg = msg;
+        });
+        pLi.appendChild(giveBtn);
+
+        pLi.style.flexWrap = 'wrap';
         pLi.addEventListener('click', (e) => {
           e.stopPropagation();
+          if (e.target.closest('.give-panel') || e.target.closest('.edit-btn')) return;
           loadPlayerView(layer, p.id);
         });
         playerUl.appendChild(pLi);
@@ -538,6 +617,23 @@ function renderSidebar() {
     }
 
     layerListEl.appendChild(li);
+  }
+
+  // Restore give-panel if it was open
+  if (activeGivePlayerId) {
+    const allPLis = document.querySelectorAll('.player-list li');
+    for (const pLi of allPLis) {
+      if (pLi._givePlayerId === activeGivePlayerId) {
+        const giveBtn = pLi.querySelector('.edit-btn');
+        if (giveBtn) giveBtn.click(); // re-open panel
+        // Restore selected item
+        if (activeGiveItemId) {
+          const sel = pLi.querySelector('.give-panel select');
+          if (sel) sel.value = activeGiveItemId;
+        }
+        break;
+      }
+    }
   }
 }
 
@@ -996,6 +1092,15 @@ function getShopInvFromUI() {
 
 const KNOWN_EFFECTS = [
   { key: 'removeBleed', label: 'Remove Bleed', valueLabel: 'stacks' },
+  { key: 'healLimb', label: 'Heal Limbs', valueLabel: 'HP' },
+  { key: 'restoreSanity', label: 'Restore Sanity', valueLabel: 'amount' },
+  { key: 'sanityDrain', label: 'Sanity Drain', valueLabel: 'amount' },
+  { key: 'reviveLimb', label: 'Revive Limb', valueLabel: 'HP' },
+  { key: 'poisonOnHit', label: 'Poison on Hit', valueLabel: 'bleed stacks' },
+  { key: 'thorns', label: 'Thorns', valueLabel: 'damage' },
+  { key: 'sanityShield', label: 'Sanity Shield', valueLabel: 'fraction (0-1)' },
+  { key: 'lightRadius', label: 'Light Radius', valueLabel: 'tiles' },
+  { key: 'speedBoost', label: 'Speed Boost', valueLabel: 'multiplier' },
 ];
 
 function addEffectRow(key = '', value = 1) {
@@ -1039,7 +1144,8 @@ function addEffectRow(key = '', value = 1) {
 
   const input = document.createElement('input');
   input.type = 'number';
-  input.min = '1';
+  input.min = '0';
+  input.step = 'any';
   input.value = value;
 
   bottomRow.appendChild(valLabel);
@@ -1060,7 +1166,7 @@ function getEffectsFromUI() {
   const effect = {};
   for (const row of rows) {
     const key = row.querySelector('select').value;
-    const val = parseInt(row.querySelector('input').value) || 1;
+    const val = parseFloat(row.querySelector('input').value) || 1;
     effect[key] = val;
   }
   return effect;
@@ -1282,6 +1388,24 @@ document.getElementById('btn-new-item').addEventListener('click', () => {
   renderItemList();
 });
 
+socket.on('giveItemResult', ({ success, message }) => {
+  // Find the give-panel msg element for the relevant player
+  const panels = document.querySelectorAll('.give-panel');
+  for (const panel of panels) {
+    const msg = panel.querySelector('span');
+    if (msg) {
+      msg.textContent = message;
+      msg.style.color = success ? '#4a4' : '#a44';
+      setTimeout(() => { msg.textContent = ''; }, 2000);
+      break;
+    }
+  }
+});
+
+socket.on('adminTeleportResult', ({ success, message }) => {
+  console.log(`Teleport: ${message}`);
+});
+
 socket.on('itemList', ({ items }) => {
   cachedItems = items || {};
   renderItemList();
@@ -1372,6 +1496,7 @@ function clearItemForm() {
   document.getElementById('item-two-handed').checked = false;
   document.getElementById('item-attack-range').value = '0';
   document.getElementById('item-attack-speed').value = '0';
+  document.getElementById('item-value').value = '0';
   document.getElementById('item-effects-list').innerHTML = '';
   document.getElementById('item-description').value = '';
   selectedSprite = null;
@@ -1394,6 +1519,7 @@ function populateItemForm(item) {
   document.getElementById('item-two-handed').checked = !!item.twoHanded;
   document.getElementById('item-attack-range').value = item.attackRange ?? 0;
   document.getElementById('item-attack-speed').value = item.attackSpeed ?? 0;
+  document.getElementById('item-value').value = item.value ?? 0;
   document.getElementById('item-effects-list').innerHTML = '';
   if (item.effect) {
     for (const [key, val] of Object.entries(item.effect)) {
@@ -1426,6 +1552,7 @@ document.getElementById('btn-save-item').addEventListener('click', () => {
     damage: parseInt(document.getElementById('item-damage').value) || 0,
     attackRange: parseInt(document.getElementById('item-attack-range').value) || 0,
     attackSpeed: parseInt(document.getElementById('item-attack-speed').value) || 0,
+    value: parseInt(document.getElementById('item-value').value) || 0,
     twoHanded: document.getElementById('item-two-handed').checked,
     minLayer: parseInt(document.getElementById('item-min-layer').value) || 0,
     effect,

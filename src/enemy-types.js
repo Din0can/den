@@ -1,5 +1,7 @@
 // Shared enemy type definitions — used by client + server
 
+export const MAX_ENEMIES_PER_LAYER = 30;
+
 export const ENEMY_TYPES = {
   rat:    { char: 'r', color: '#8a6a4a', name: 'Rat',    hp: 10, damage: 2,  armor: 0, moveSpeed: 350, sightRange: 5, ownership: 'player', attackRange: 1, attackSpeed: 800,  incorporeal: false },
   spider: { char: 's', color: '#5a5a5a', name: 'Spider', hp: 20, damage: 5,  armor: 1, moveSpeed: 450, sightRange: 6, ownership: 'player', attackRange: 1, attackSpeed: 1000, incorporeal: false },

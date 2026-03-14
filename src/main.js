@@ -5,7 +5,7 @@ import { init as initCRT, resize as resizeCRT, resizeTexture } from './crt-rende
 import { GameMap } from './game-map.js';
 import { Entity } from './entity.js';
 import { Camera } from './camera.js';
-import { initInput, initHotbarInput, getMovementDir, consumeInteract, initShopInput, destroyShopInput } from './input.js';
+import { initInput, initHotbarInput, getMovementDir, consumeInteract, consumeDrop, initShopInput, destroyShopInput } from './input.js';
 import { initHotbar, getState as getHotbarState, setAllSlots, setEquipment, setEquipAnim, getEquipAnim, enterShopMode, exitShopMode, updateShopData, getShopState } from './hotbar.js';
 import { getSlotCenter, getEquipSlotCenter, renderShopOverlay, SHOP_CANVAS_H } from './hotbar-renderer.js';
 import { initRenderer, render } from './game-renderer.js';
@@ -186,12 +186,15 @@ function init() {
     loadLayer(data.layerMeta, data.initialChunks);
     if (data.stats) localStats = data.stats;
     if (data.blood) gameMap.loadBlood(data.blood);
+    if (data.floorItems) gameMap.loadFloorItems(data.floorItems);
     syncInventory(data);
 
     localEntity = new Entity(data.id, data.spawn.x, data.spawn.y, '@', COLORS.PLAYER_LOCAL, playerName, 'south');
 
     for (const p of data.players) {
-      remotePlayers.set(p.id, new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south'));
+      const ent = new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south');
+      ent.lightRadius = p.lightRadius || 0;
+      remotePlayers.set(p.id, ent);
     }
 
     // Load enemy snapshot
@@ -212,7 +215,9 @@ function init() {
   });
 
   network.onPlayerJoined((data) => {
-    remotePlayers.set(data.id, new Entity(data.id, data.spawn.x, data.spawn.y, '@', data.color || '#888888', data.name || '', data.facing || 'south'));
+    const ent = new Entity(data.id, data.spawn.x, data.spawn.y, '@', data.color || '#888888', data.name || '', data.facing || 'south');
+    ent.lightRadius = data.lightRadius || 0;
+    remotePlayers.set(data.id, ent);
   });
 
   network.onPlayerLeft((data) => {
@@ -227,6 +232,7 @@ function init() {
       if (data.color) ent.color = data.color;
       if (data.name) ent.name = data.name;
       if (data.facing) ent.facing = data.facing;
+      if (data.lightRadius !== undefined) ent.lightRadius = data.lightRadius;
     }
   });
 
@@ -244,11 +250,14 @@ function init() {
     loadLayer(data.layerMeta, data.initialChunks);
     if (data.stats) localStats = data.stats;
     if (data.blood) gameMap.loadBlood(data.blood);
+    if (data.floorItems) gameMap.loadFloorItems(data.floorItems);
     syncInventory(data);
     remotePlayers.clear();
     if (data.players) {
       for (const p of data.players) {
-        remotePlayers.set(p.id, new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south'));
+        const ent = new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south');
+        ent.lightRadius = p.lightRadius || 0;
+        remotePlayers.set(p.id, ent);
       }
     }
     // Load enemy snapshot for new layer
@@ -329,6 +338,13 @@ function init() {
           break;
         }
       }
+    }
+
+    // Re-check FOV if equipment with lightRadius changed
+    for (const key of ['head', 'chest', 'legs', 'mainHand', 'offHand']) {
+      const oldEff = oldEquip[key]?.effect?.lightRadius;
+      const newEff = newState.equipment[key]?.effect?.lightRadius;
+      if (oldEff !== newEff) { fovDirty = true; break; }
     }
   });
 
@@ -482,6 +498,58 @@ function init() {
     }
   });
 
+  // --- Remote combat event handlers (other players' combat visible to us) ---
+
+  network.onRemoteAttack((data) => {
+    const enemy = enemies.get(data.enemyId);
+    const now = performance.now();
+    if (enemy) {
+      // Red blink on enemy
+      combatEffects.push({
+        type: 'blink', entityType: 'enemy', entityId: data.enemyId,
+        startTime: now, duration: 200,
+      });
+      // Floating damage text above enemy (yellow)
+      combatEffects.push({
+        type: 'floatText', entityType: 'enemy', entityId: data.enemyId,
+        startTime: now, duration: 1500,
+        text: `-${data.damage}`, color: '#ffcc44',
+        x: enemy.x, y: enemy.y,
+      });
+      // Update enemy HP locally
+      enemy.hp = data.enemyHp;
+      enemy.maxHp = data.enemyMaxHp;
+    }
+  });
+
+  network.onRemoteCombatHit((data) => {
+    const enemy = enemies.get(data.enemyId);
+    const now = performance.now();
+    if (enemy) {
+      // Wiggle effect on enemy (toward remote player position)
+      combatEffects.push({
+        type: 'wiggle', entityType: 'enemy', entityId: data.enemyId,
+        startTime: now, duration: 200,
+        dx: data.targetX - enemy.x, dy: data.targetY - enemy.y,
+      });
+    }
+    // Float damage text at remote player position (red)
+    combatEffects.push({
+      type: 'floatText', entityType: 'world', entityId: null,
+      startTime: now, duration: 1500,
+      text: `-${data.damage}`, color: '#ff4444',
+      x: data.targetX, y: data.targetY,
+    });
+  });
+
+  network.onFloorItemAdded((data) => {
+    gameMap.setFloorItem(data.x, data.y, data.item);
+  });
+
+  network.onFloorItemRemoved((data) => {
+    gameMap.removeFloorItem(data.x, data.y);
+  });
+
   // Debug: F9 toggles sanity between 10 and 100 (for testing enemies)
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F9') {
@@ -493,13 +561,23 @@ function init() {
   initCRT(gameLoop);
 }
 
+function buildHintLine2(item) {
+  return item.description || '';
+}
+
 function gameLoop(now) {
   if (!localEntity) return;
 
   // Movement with cooldown (slowed by low health and bleed)
   const dir = getMovementDir();
   const shopActive = getShopState().shopMode;
-  const moveCooldown = localStats ? MOVE_COOLDOWN / getSpeedMultiplier(localStats) : MOVE_COOLDOWN;
+  let speedMult = 1;
+  const eqState = getHotbarState();
+  for (const key of ['head', 'chest', 'legs', 'mainHand', 'offHand']) {
+    const eq = eqState.equipment[key];
+    if (eq?.effect?.speedBoost) speedMult *= eq.effect.speedBoost;
+  }
+  const moveCooldown = localStats ? MOVE_COOLDOWN / getSpeedMultiplier(localStats) / speedMult : MOVE_COOLDOWN;
   if (dir && !shopActive && now - lastMoveTime >= moveCooldown) {
     const newFacing = dirToFacing(dir.dx, dir.dy);
     const facingChanged = localEntity.facing !== newFacing;
@@ -551,11 +629,15 @@ function gameLoop(now) {
       } else if (shopState.shopBrowsing === 'player') {
         if (hotbar.selectedIndex >= 0) {
           network.sendSellToShop(shopState.shopData.shopId, hotbar.selectedIndex);
+        } else if (hotbar.selectedEquipSlot) {
+          network.sendSellEquipped(shopState.shopData.shopId, hotbar.selectedEquipSlot);
         }
       }
     } else if (hotbar.selectedEquipSlot) {
       // Equipment slot selected → unequip (explicit user intent via Shift+N)
       network.sendUnequipItem(hotbar.selectedEquipSlot);
+    } else if (gameMap.getFloorItem(localEntity.x, localEntity.y)) {
+      network.sendPickupItem();
     } else if (onEntryTile) {
       network.sendEnterExit();
     } else {
@@ -587,9 +669,32 @@ function gameLoop(now) {
     }
   }
 
+  // Drop item (X key)
+  if (consumeDrop()) {
+    const dropHotbar = getHotbarState();
+    const dropShopActive = getShopState().shopMode;
+    if (!dropShopActive) {
+      if (gameMap.getFloorItem(localEntity.x, localEntity.y)) {
+        containerMsg = "Can't drop here!";
+        containerMsgTime = performance.now();
+      } else if (dropHotbar.selectedEquipSlot && dropHotbar.equipment[dropHotbar.selectedEquipSlot]) {
+        network.sendDropItem(dropHotbar.selectedEquipSlot, true);
+      } else if (dropHotbar.selectedIndex >= 0 && dropHotbar.slots[dropHotbar.selectedIndex]) {
+        network.sendDropItem(dropHotbar.selectedIndex, false);
+      }
+    }
+  }
+
   // FOV
   if (fovDirty) {
-    calculateFOV(gameMap, localEntity.x, localEntity.y, FOV_RADIUS, FOV_GRACE_RADIUS);
+    let fovBonus = 0;
+    const fovHotbar = getHotbarState();
+    for (const key of ['head', 'chest', 'legs', 'mainHand', 'offHand']) {
+      const eq = fovHotbar.equipment[key];
+      if (eq?.effect?.lightRadius) fovBonus += eq.effect.lightRadius;
+    }
+    localEntity.lightRadius = fovBonus;
+    calculateFOV(gameMap, localEntity.x, localEntity.y, FOV_RADIUS + fovBonus, FOV_GRACE_RADIUS);
     fog.updateFade(gameMap);
     fovDirty = false;
   }
@@ -606,19 +711,29 @@ function gameLoop(now) {
   let equipHint = null;
   if (hotbarForHint.selectedEquipSlot && hotbarForHint.equipment[hotbarForHint.selectedEquipSlot]) {
     const eqItem = hotbarForHint.equipment[hotbarForHint.selectedEquipSlot];
-    equipHint = `${eqItem.name} | Unequip (E)`;
+    const line2 = buildHintLine2(eqItem);
+    equipHint = { line1: `${eqItem.name} | Unequip (E) | Drop (X)`, line2 };
   } else if (hotbarForHint.selectedIndex >= 0) {
     const item = hotbarForHint.slots[hotbarForHint.selectedIndex];
-    if (item && item.slot) equipHint = `${item.name} | Equip (E)`;
-    else if (item && item.type === 'consumable') equipHint = `${item.name} | Use (E)`;
+    if (item) {
+      let line1;
+      if (item.slot) line1 = `${item.name} | Equip (E) | Drop (X)`;
+      else if (item.type === 'consumable') line1 = `${item.name} | Use (E) | Drop (X)`;
+      else line1 = `${item.name} | Drop (X)`;
+      const line2 = buildHintLine2(item);
+      equipHint = { line1, line2 };
+    }
   }
   hudInfo.equipHint = equipHint;
   hudInfo.shopState = getShopState();
 
+  // Detect floor item at player position (for "Pick up (E)" prompt)
+  const standingOnFloorItem = !!gameMap.getFloorItem(localEntity.x, localEntity.y);
+
   // Detect container in facing direction (for "Loot (E)" prompt)
   // Only show if E wouldn't be consumed by equip/unequip or entry
   let facingContainer = false;
-  if (!onEntryTile) {
+  if (!onEntryTile && !standingOnFloorItem) {
     const offset = FACING_OFFSET[localEntity.facing];
     const tx = localEntity.x + offset.dx;
     const ty = localEntity.y + offset.dy;
@@ -662,7 +777,7 @@ function gameLoop(now) {
   }
 
   // Render
-  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos, facingContainer, containerFloatMsg, facingShop, enemies, combatEffects);
+  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos, facingContainer, containerFloatMsg, facingShop, enemies, combatEffects, standingOnFloorItem);
   renderHud(hudInfo);
 }
 

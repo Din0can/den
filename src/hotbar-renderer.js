@@ -242,8 +242,9 @@ export function renderShopOverlay(ctx, shopState, hotbarState, w, h) {
   if (shopState.shopBrowsing === 'shop' && inv.length > 0) {
     const item = inv[shopState.shopSelectedIndex];
     if (item) {
-      if (item.stock === 0) hint = `${item.name} | Out of stock`;
-      else hint = `${item.name} | Buy ${item.buyPrice}g (E)`;
+      const desc = item.description ? `${item.description} | ` : '';
+      if (item.stock === 0) hint = `${item.name} | ${desc}Out of stock`;
+      else hint = `${item.name} | ${desc}Buy ${item.buyPrice}g (E)`;
     }
   } else if (shopState.shopBrowsing === 'player' && hotbarState) {
     let item = null;
@@ -253,9 +254,10 @@ export function renderShopOverlay(ctx, shopState, hotbarState, w, h) {
       item = hotbarState.slots[hotbarState.selectedIndex];
     }
     if (item) {
+      const desc = item.description ? `${item.description} | ` : '';
       const sellPrice = Math.floor((item.value || 0) * (data.sellMarkup || 0.8));
-      if (sellPrice <= 0) hint = `${item.name} | Cannot sell`;
-      else hint = `${item.name} | Sell ${sellPrice}g (E)`;
+      if (sellPrice <= 0) hint = `${item.name} | ${desc}Cannot sell`;
+      else hint = `${item.name} | ${desc}Sell ${sellPrice}g (E)`;
     }
   }
 

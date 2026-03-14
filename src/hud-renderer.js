@@ -106,17 +106,35 @@ export function renderHud(info) {
 
   // Equip/Use hint between equipment row and hotbar
   if (info.equipHint && !(info.shopState && info.shopState.shopMode)) {
+    const hint = typeof info.equipHint === 'string'
+      ? { line1: info.equipHint, line2: '' }
+      : info.equipHint;
     const SLOT_SIZE = 36;
     const hotbarStartY = (h - SLOT_SIZE) / 2;
-    ctx.font = `10px ${FONT}`;
     ctx.textBaseline = 'top';
     ctx.textAlign = 'center';
-    const tw = ctx.measureText(info.equipHint).width;
-    const hintY = hotbarStartY - 8;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(w / 2 - tw / 2 - 4, hintY - 2, tw + 8, 13);
+
+    // Line 1
+    ctx.font = `10px ${FONT}`;
+    const tw1 = ctx.measureText(hint.line1).width;
+    let hintY = hotbarStartY - 8;
+    if (hint.line2) hintY -= 16;
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillRect(w / 2 - tw1 / 2 - 4, hintY - 2, tw1 + 8, 13);
     ctx.fillStyle = '#cccccc';
-    ctx.fillText(info.equipHint, w / 2, hintY);
+    ctx.fillText(hint.line1, w / 2, hintY);
+
+    // Line 2 (description + effects)
+    if (hint.line2) {
+      ctx.font = `10px ${FONT}`;
+      const tw2 = ctx.measureText(hint.line2).width;
+      const line2Y = hintY + 16;
+      ctx.fillStyle = 'rgba(0,0,0,0.8)';
+      ctx.fillRect(w / 2 - tw2 / 2 - 4, line2Y - 2, tw2 + 8, 13);
+      ctx.fillStyle = '#999999';
+      ctx.fillText(hint.line2, w / 2, line2Y);
+    }
+
     ctx.textAlign = 'left';
   }
 

@@ -1,6 +1,6 @@
 // Server-side enemy lifecycle — spawn, AI state machine, movement, despawn
 
-import { ENEMY_TYPES, getSanityBracket } from './src/enemy-types.js';
+import { ENEMY_TYPES, getSanityBracket, MAX_ENEMIES_PER_LAYER } from './src/enemy-types.js';
 import { findPath, hasLineOfSight, getRandomWalkable } from './src/pathfinding.js';
 import { TILE_META } from './src/config.js';
 
@@ -66,6 +66,15 @@ export class EnemyManager {
     this.byOwner = new Map();        // playerId -> Set<id>
     this.lastSpawnCheck = new Map();  // playerId -> timestamp
     this.layerSpawnCheck = new Map(); // layerId -> timestamp
+    this.posIndex = new Map();       // "layerId:x:y" -> enemyId
+  }
+
+  _posKey(layerId, x, y) { return `${layerId}:${x}:${y}`; }
+  _posSet(layerId, x, y, enemyId) { this.posIndex.set(this._posKey(layerId, x, y), enemyId); }
+  _posClear(layerId, x, y) { this.posIndex.delete(this._posKey(layerId, x, y)); }
+  _posHasEnemy(layerId, x, y, excludeId) {
+    const eid = this.posIndex.get(this._posKey(layerId, x, y));
+    return eid !== undefined && eid !== excludeId;
   }
 
   /**
@@ -84,7 +93,7 @@ export class EnemyManager {
       const layer = layerManager.getLayer(layerId);
       if (!layer) continue;
 
-      this._spawnCheck(player, playerId, layer, layerId, now);
+      this._spawnCheck(player, playerId, layer, layerId, now, players);
     }
 
     // Tick each enemy
@@ -101,12 +110,16 @@ export class EnemyManager {
   /**
    * Check if we should spawn enemies for a player based on sanity.
    */
-  _spawnCheck(player, playerId, layer, layerId, now) {
+  _spawnCheck(player, playerId, layer, layerId, now, players) {
     if (layer.type !== 'dynamic') return;
 
     const sanity = player.stats?.sanity ?? 100;
     const bracket = getSanityBracket(sanity);
     if (bracket.maxEnemies === 0) return;
+
+    // Global per-layer cap
+    const layerCapSet = this.byLayer.get(layerId);
+    if (layerCapSet && layerCapSet.size >= MAX_ENEMIES_PER_LAYER) return;
 
     // Player-based enemies
     const lastCheck = this.lastSpawnCheck.get(playerId) || 0;
@@ -134,14 +147,13 @@ export class EnemyManager {
     let lowestPlayer = null;
     let lowestPlayerId = null;
     for (const pid of layer.players) {
-      const p = player.id === playerId ? player : null;
-      // We need to check all players — but we only have the current one here.
-      // This is called per-player, so just check if this player is the lowest.
-      const ps = player.stats?.sanity ?? 100;
+      const p = players.get(pid);
+      if (!p) continue;
+      const ps = p.stats?.sanity ?? 100;
       if (ps < lowestSanity) {
         lowestSanity = ps;
-        lowestPlayer = player;
-        lowestPlayerId = playerId;
+        lowestPlayer = p;
+        lowestPlayerId = pid;
       }
     }
 
@@ -226,6 +238,7 @@ export class EnemyManager {
     };
 
     this.enemies.set(id, enemy);
+    this._posSet(layerId, spawnPos.x, spawnPos.y, id);
 
     // Track by layer
     if (!this.byLayer.has(layerId)) this.byLayer.set(layerId, new Set());
@@ -286,15 +299,7 @@ export class EnemyManager {
     for (const pos of candidates) {
       const tile = getTile(pos.x, pos.y);
       if (isPassableTile(tile)) {
-        // Check not occupied by another enemy
-        let occupied = false;
-        for (const [, e] of this.enemies) {
-          if (e.x === pos.x && e.y === pos.y && e.layerId === layerId) {
-            occupied = true;
-            break;
-          }
-        }
-        if (!occupied) return pos;
+        if (!this._posHasEnemy(layerId, pos.x, pos.y)) return pos;
       }
       // Try nearby tiles in the room
       for (let dy = -2; dy <= 2; dy++) {
@@ -303,14 +308,7 @@ export class EnemyManager {
           const nx = pos.x + dx;
           const ny = pos.y + dy;
           if (isPassableTile(getTile(nx, ny))) {
-            let occupied = false;
-            for (const [, e] of this.enemies) {
-              if (e.x === nx && e.y === ny && e.layerId === layerId) {
-                occupied = true;
-                break;
-              }
-            }
-            if (!occupied) return { x: nx, y: ny };
+            if (!this._posHasEnemy(layerId, nx, ny)) return { x: nx, y: ny };
           }
         }
       }
@@ -419,21 +417,16 @@ export class EnemyManager {
     }
     // Only non-incorporeal enemies are blocked by other enemies
     if (!enemy.incorporeal) {
-      const layerSet = this.byLayer.get(enemy.layerId);
-      if (layerSet) {
-        for (const eid of layerSet) {
-          if (eid === enemy.id) continue;
-          const e = this.enemies.get(eid);
-          if (e && e.x === nextX && e.y === nextY) {
-            enemy.path = null;
-            return false;
-          }
-        }
+      if (this._posHasEnemy(enemy.layerId, nextX, nextY, enemy.id)) {
+        enemy.path = null;
+        return false;
       }
     }
     enemy.facing = facingToward(enemy.x, enemy.y, nextX, nextY);
+    this._posClear(enemy.layerId, enemy.x, enemy.y);
     enemy.x = nextX;
     enemy.y = nextY;
+    this._posSet(enemy.layerId, nextX, nextY, enemy.id);
     enemy._moved = true;
     return true;
   }
@@ -446,6 +439,7 @@ export class EnemyManager {
   killEnemy(enemyId) {
     const enemy = this.enemies.get(enemyId);
     if (!enemy) return;
+    this._posClear(enemy.layerId, enemy.x, enemy.y);
     enemy._despawned = true;
     const layerSet = this.byLayer.get(enemy.layerId);
     if (layerSet) layerSet.delete(enemyId);
@@ -580,6 +574,14 @@ export class EnemyManager {
               bloodUpdate,
             });
 
+            // Thorns: reflect damage back to enemy
+            for (const eff of (targetPlayer.equipEffects || [])) {
+              if (eff.thorns) {
+                enemy.hp -= eff.thorns;
+                enemy._moved = true;
+              }
+            }
+
             return; // Attack replaces movement for this tick
           }
         }
@@ -710,6 +712,7 @@ export class EnemyManager {
     for (const eid of ownerSet) {
       const enemy = this.enemies.get(eid);
       if (enemy) {
+        this._posClear(enemy.layerId, enemy.x, enemy.y);
         enemy._despawned = true;
         // Remove from layer tracking
         const layerSet = this.byLayer.get(enemy.layerId);
@@ -731,6 +734,7 @@ export class EnemyManager {
     for (const eid of layerSet) {
       const enemy = this.enemies.get(eid);
       if (enemy) {
+        this._posClear(enemy.layerId, enemy.x, enemy.y);
         enemy._despawned = true;
         if (enemy.ownerType === 'player' && enemy.ownerId) {
           const ownerSet = this.byOwner.get(enemy.ownerId);
@@ -813,6 +817,22 @@ export class EnemyManager {
             // Send blood to entire layer
             const playerLayerId = enemy.layerId;
             io.to(`layer:${playerLayerId}`).emit('bloodUpdate', { updates: [evt.bloodUpdate] });
+          }
+        }
+        // Broadcast remote combat hit for layer-based enemies
+        if (enemy.ownerType === 'layer') {
+          for (const evt of enemy._combatEvents) {
+            const targetP = players.get(evt.targetId);
+            const targetSock = io.sockets.sockets.get(evt.targetId);
+            if (targetP && targetSock) {
+              targetSock.to(`layer:${enemy.layerId}`).emit('remoteCombatHit', {
+                targetId: evt.targetId,
+                targetX: targetP.x,
+                targetY: targetP.y,
+                enemyId: enemy.id,
+                damage: evt.damage,
+              });
+            }
           }
         }
         enemy._combatEvents = [];

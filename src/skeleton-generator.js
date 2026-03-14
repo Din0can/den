@@ -266,6 +266,25 @@ export function generateSkeleton(seed, skeletonDensity, maxWidth, maxHeight) {
     }
   }
 
+  // Floor item positions (~5% per bone room)
+  const floorItemPositions = [];
+  for (const room of rooms) {
+    if (rng() < 0.05) {
+      const candidates = [];
+      for (let ry = room.y + 1; ry < room.y + room.h - 1; ry++) {
+        for (let rx = room.x + 1; rx < room.x + room.w - 1; rx++) {
+          const t = get(rx, ry);
+          if ((t === TILE.FLOOR || t === TILE.GRASS || t === TILE.STONE) && !overlayMap.has((rx << 16) | (ry & 0xFFFF))) {
+            candidates.push({ x: rx, y: ry });
+          }
+        }
+      }
+      if (candidates.length > 0) {
+        floorItemPositions.push(candidates[Math.floor(rng() * candidates.length)]);
+      }
+    }
+  }
+
   // Build overlay array for chunk distribution
   const overlayArray = [];
   for (const [key, val] of overlayMap) {
@@ -308,7 +327,7 @@ export function generateSkeleton(seed, skeletonDensity, maxWidth, maxHeight) {
   }
 
   console.log(`Skeleton generated: ${bonePositions.length} bones, ${rooms.length} rooms`);
-  return { chunks, rooms, doors };
+  return { chunks, rooms, doors, floorItemPositions };
 }
 
 /** Generate a small cluster of rooms within a region */

@@ -101,6 +101,21 @@ export function createItemInstance(def) {
   };
 }
 
+export function generateFloorItem(depth) {
+  const weights = getWeightsForDepth(depth);
+  let rarity = pickRarity(weights);
+  let candidates = null;
+  for (let r = RARITY_ORDER.indexOf(rarity); r >= 0; r--) {
+    const tryRarity = RARITY_ORDER[r];
+    const list = rarityIndex ? rarityIndex.get(tryRarity) : null;
+    candidates = list ? list.filter(d => d.minLayer <= depth) : [];
+    if (candidates.length > 0) break;
+  }
+  if (!candidates || candidates.length === 0) return null;
+  const def = candidates[Math.floor(Math.random() * candidates.length)];
+  return createItemInstance(def);
+}
+
 export function generateContainerLoot(containerType, depth) {
   const cfg = containerConfig[containerType] || { dropChance: 1, rolls: [1, 1] };
   // Drop chance check — if failed, container is empty

@@ -10,6 +10,9 @@ const NAME_FONT = `${FONT_SIZE - 6}px 'JetBrains Mono', monospace`;
 let _torchGlowCanvas = null;
 let _torchGlowSize = 0;
 
+// Pre-rendered player-light glow canvases keyed by radius in tiles
+const _playerGlowCache = new Map();
+
 function getTorchGlowCanvas() {
   const size = TORCH_VISION_RADIUS * TILE_SIZE * 2;
   if (_torchGlowCanvas && _torchGlowSize === size) return _torchGlowCanvas;
@@ -27,6 +30,26 @@ function getTorchGlowCanvas() {
   g.fillRect(0, 0, size, size);
   return _torchGlowCanvas;
 }
+
+function getPlayerGlowCanvas(radiusTiles) {
+  if (_playerGlowCache.has(radiusTiles)) return _playerGlowCache.get(radiusTiles);
+  const size = radiusTiles * TILE_SIZE * 2;
+  const c = typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(size, size)
+    : (() => { const el = document.createElement('canvas'); el.width = size; el.height = size; return el; })();
+  const g = c.getContext('2d');
+  const r = size / 2;
+  const grad = g.createRadialGradient(r, r, 0, r, r, r);
+  grad.addColorStop(0, 'rgba(255, 180, 60, 0.14)');
+  grad.addColorStop(0.4, 'rgba(255, 140, 30, 0.07)');
+  grad.addColorStop(1.0, 'rgba(255, 100, 0, 0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  _playerGlowCache.set(radiusTiles, c);
+  return c;
+}
+
+const RARITY_COLORS = { common: '#888888', uncommon: '#5a8a5a', rare: '#4a7a9a', epic: '#7a5a8a', legendary: '#9a7a3a' };
 
 // Zero-alloc torch collection buffers
 const _torchXs = new Int32Array(16);
@@ -89,7 +112,7 @@ function drawDoor(px, py, door) {
   }
 }
 
-export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos, showLootPrompt, containerFloatMsg, showShopPrompt, enemies, combatEffects) {
+export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos, showLootPrompt, containerFloatMsg, showShopPrompt, enemies, combatEffects, showPickupPrompt) {
   const entityArray = Array.from(entities);
   const viewRows = viewport.rows;
 
@@ -152,6 +175,16 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
 
         ctx.fillStyle = fg;
         ctx.fillText(ch, px + 2, py + 1);
+
+        // Floor item on top of base tile (only if visible and no overlay)
+        if (vis) {
+          const floorItem = gameMap.getFloorItem(mx, my);
+          if (floorItem) {
+            const rarityStr = typeof floorItem.rarity === 'object' ? floorItem.rarity?.name : floorItem.rarity;
+            ctx.fillStyle = RARITY_COLORS[rarityStr] || '#ccaa00';
+            ctx.fillText(floorItem.char || '?', px + 2, py + 1);
+          }
+        }
       }
     }
   }
@@ -301,14 +334,14 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
 
   // Apply smooth fog overlay
   if (fog) {
-    fog.render(ctx, gameMap, camera, localEntity.x, localEntity.y);
+    fog.render(ctx, gameMap, camera, localEntity.x, localEntity.y, localEntity.lightRadius || 0);
   }
 
   // --- Torch vision: glow, chars, and entity reveal on top of fog ---
   let torchCount = 0;
   for (const [key] of gameMap.torchOverlay) {
     const tx = key >> 16;
-    const ty = key & 0xFFFF;
+    const ty = (key << 16) >> 16;
     const margin = TORCH_VISION_RADIUS + 2;
     if (tx >= camera.x - margin && tx < camera.x + viewport.cols + margin &&
         ty >= camera.y - margin && ty < camera.y + viewport.rows + margin) {
@@ -374,6 +407,108 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
       ctx.font = FONT;
       drawRotatedChar(ent.char, sx, sy, ent.color, ent.facing);
     }
+  }
+
+  // --- Player light: walking torch effect for players with lightRadius ---
+  {
+    // Collect all light sources: local player + remote players with lightRadius
+    const lightSources = [];
+    // Local player lightRadius from equipment
+    let localLightRadius = 0;
+    if (localEntity) {
+      // Read lightRadius from equipment (same as FOV code in main.js)
+      // localEntity doesn't store equipment, but we compute from the hotbar state
+      // We already have localEntity — check if it has lightRadius (set by caller)
+      // Actually, the local player's lightRadius is computed from equipment in main.js FOV section
+      // For rendering, we need to derive it. Since the server sends it in the player object,
+      // but localEntity is created client-side, let's compute it from equipment in the hotbar.
+      // However, game-renderer doesn't have access to hotbar. Instead, we'll check for
+      // a lightRadius property on localEntity, which we'll set from main.js.
+      // For now, look at equipment effects — the fovBonus in main.js already does this.
+      // We don't have that info here, so we'll rely on localEntity.lightRadius if set.
+      localLightRadius = localEntity.lightRadius || 0;
+    }
+    if (localEntity && localLightRadius > 0) {
+      lightSources.push({ x: localEntity.x, y: localEntity.y, radius: localLightRadius });
+    }
+    for (const ent of entityArray) {
+      if (ent.lightRadius > 0) {
+        lightSources.push({ x: ent.x, y: ent.y, radius: ent.lightRadius, ent });
+      }
+    }
+
+    if (lightSources.length > 0) {
+      // Draw glow stamps
+      ctx.globalCompositeOperation = 'screen';
+      for (const src of lightSources) {
+        const glowCanvas = getPlayerGlowCanvas(src.radius);
+        const glowR = src.radius * TILE_SIZE;
+        const gx = (src.x - camera.x + 0.5) * TILE_SIZE - glowR;
+        const gy = (src.y - camera.y + 0.5) * TILE_SIZE - glowR;
+        ctx.drawImage(glowCanvas, gx, gy);
+      }
+      ctx.globalCompositeOperation = 'source-over';
+
+      // Reveal enemies near light-carrying players (even if outside local FOV)
+      if (enemies) {
+        for (const [, enemy] of enemies) {
+          if (gameMap.isVisible(enemy.x, enemy.y)) continue;
+          let nearLight = false;
+          for (const src of lightSources) {
+            const dx = enemy.x - src.x, dy = enemy.y - src.y;
+            if (dx * dx + dy * dy <= src.radius * src.radius) { nearLight = true; break; }
+          }
+          if (!nearLight) continue;
+          const esx = (enemy.x - camera.x) * TILE_SIZE;
+          const esy = (enemy.y - camera.y) * TILE_SIZE;
+          if (esx < -TILE_SIZE || esx >= viewport.gameWidth || esy < -TILE_SIZE || esy >= viewRows * TILE_SIZE) continue;
+          ctx.font = FONT;
+          drawRotatedChar(enemy.char, esx, esy, enemy.color, enemy.facing);
+        }
+      }
+
+      // Reveal remote players near light sources (even if outside local FOV)
+      for (const ent of entityArray) {
+        if (gameMap.isVisible(ent.x, ent.y)) continue;
+        let nearLight = false;
+        for (const src of lightSources) {
+          const dx = ent.x - src.x, dy = ent.y - src.y;
+          if (dx * dx + dy * dy <= src.radius * src.radius) { nearLight = true; break; }
+        }
+        if (!nearLight) continue;
+        const esx = (ent.x - camera.x) * TILE_SIZE;
+        const esy = (ent.y - camera.y) * TILE_SIZE;
+        if (esx < -TILE_SIZE || esx >= viewport.gameWidth || esy < -TILE_SIZE || esy >= viewRows * TILE_SIZE) continue;
+        ctx.font = FONT;
+        drawRotatedChar(ent.char, esx, esy, ent.color, ent.facing);
+        // Name label
+        if (ent.name) {
+          ctx.font = NAME_FONT;
+          ctx.fillStyle = ent.color;
+          if (ent._nameWidth === undefined) {
+            ent._nameWidth = ctx.measureText(ent.name).width;
+          }
+          ctx.fillText(ent.name, esx + TILE_SIZE / 2 - ent._nameWidth / 2, esy - 12);
+          ctx.font = FONT;
+        }
+      }
+    }
+  }
+
+  // "Pick up (E)" floating prompt when standing on a floor item
+  if (showPickupPrompt && localEntity) {
+    const sx = (localEntity.x - camera.x) * TILE_SIZE;
+    const sy = (localEntity.y - camera.y) * TILE_SIZE;
+    const label = 'Pick up (E)';
+    ctx.font = NAME_FONT;
+    const tw = ctx.measureText(label).width;
+    const px = sx + TILE_SIZE / 2 - tw / 2;
+    const py = sy - 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(px - 4, py - 2, tw + 8, 14);
+    ctx.fillStyle = '#cccc88';
+    ctx.fillText(label, px, py);
+    ctx.font = FONT;
   }
 
   // "Enter (E)" floating prompt above player on ENTRY tiles

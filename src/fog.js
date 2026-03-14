@@ -62,8 +62,9 @@ export class Fog {
     const h = gameMap.height;
     for (let i = 0; i < w * h; i++) {
       if (gameMap.visible[i]) {
-        const x = i % w;
-        const y = (i / w) | 0;
+        // Convert local array index to world coordinates for consistent fog keys
+        const x = (i % w) + gameMap.offsetX;
+        const y = ((i / w) | 0) + gameMap.offsetY;
         const key = this._key(x, y);
         this._fadeState.delete(key);
         this._settled.set(key, 0);
@@ -101,7 +102,7 @@ export class Fog {
    * Render fog overlay onto the game canvas.
    * Call after all tiles and entities are drawn.
    */
-  render(gameCtx, gameMap, camera, playerX, playerY) {
+  render(gameCtx, gameMap, camera, playerX, playerY, lightBonus = 0) {
     const w = gameCtx.canvas.width;
     const h = gameCtx.canvas.height;
     this._ensureCanvas(w, h);
@@ -119,7 +120,7 @@ export class Fog {
 
     const playerScreenX = (playerX - camera.x + 0.5) * TILE_SIZE;
     const playerScreenY = (playerY - camera.y + 0.5) * TILE_SIZE;
-    const gradientRadius = (FOV_RADIUS + FOV_GRACE_RADIUS) * TILE_SIZE;
+    const gradientRadius = (FOV_RADIUS + FOV_GRACE_RADIUS + lightBonus) * TILE_SIZE;
 
     const gradient = fogCtx.createRadialGradient(
       playerScreenX, playerScreenY, 0,

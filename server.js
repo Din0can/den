@@ -11,7 +11,7 @@ import { CHUNK_SIZE, CHUNK_VIEW_DIST, chunkKey, worldToChunk, chunkIndex } from 
 import { nameToColor } from './src/name-color.js';
 import { createPlayerStats, applyFlatDamage, tickBleed } from './src/stats.js';
 import { splatter as bloodSplatter, dropBlood, packCoord } from './src/blood.js';
-import { loadItemRegistry, getAllItems, getItemDef, generateContainerLoot, createItemInstance, CONTAINER_TILES, CONTAINER_CHARS, EQUIP_SLOTS, setContainerConfig, getContainerConfig, setRarityWeights, getRarityWeights } from './src/items.js';
+import { loadItemRegistry, getAllItems, getItemDef, generateContainerLoot, generateFloorItem, createItemInstance, CONTAINER_TILES, CONTAINER_CHARS, EQUIP_SLOTS, setContainerConfig, getContainerConfig, setRarityWeights, getRarityWeights } from './src/items.js';
 import { EnemyManager } from './enemy-manager.js';
 import { getEnemyTypes, updateEnemyType, loadEnemyTypes } from './src/enemy-types.js';
 
@@ -191,6 +191,25 @@ function debouncedEnemyTypeSave() {
 
 // Container state per session: "layerId:x,y" -> { items: [...], opened: true }
 const containerState = new Map();
+const layerFloorItems = new Map(); // layerId -> Map<"x,y" -> item>
+
+function getLayerFloorItems(layerId) {
+  let items = layerFloorItems.get(layerId);
+  if (!items) {
+    items = new Map();
+    layerFloorItems.set(layerId, items);
+  }
+  return items;
+}
+
+function serializeFloorItems(floorItems) {
+  const result = [];
+  for (const [key, item] of floorItems) {
+    const [x, y] = key.split(',').map(Number);
+    result.push({ x, y, item });
+  }
+  return result;
+}
 
 // Initialize: load from disk, create default L0 if missing
 await mkdir(STATIC_LAYERS_DIR, { recursive: true });
@@ -292,11 +311,18 @@ function recomputeEquipment(player) {
     if (item.effect) effects.push(item.effect);
   }
 
+  let lightRadius = 0;
+  for (const key of EQUIP_SLOTS) {
+    const it = player.equipment[key];
+    if (it?.effect?.lightRadius) lightRadius += it.effect.lightRadius;
+  }
+
   player.totalArmor = totalArmor;
   player.activeDamage = activeDamage;
   player.equipEffects = effects;
   player.attackRange = player.equipment.mainHand?.attackRange || 1;
   player.attackSpeed = player.equipment.mainHand?.attackSpeed || 1000;
+  player.lightRadius = lightRadius;
 }
 
 function getContainerType(layer, playerId, x, y) {
@@ -384,6 +410,14 @@ function materializeLayer(layer) {
   if (layer.materialized) return;
   const boneData = generateSkeleton(layer.seed, layer.skeletonDensity, layer.bounds.maxX, layer.bounds.maxY);
   layer.materialize(boneData);
+  // Spawn floor items from bone rooms
+  if (boneData.floorItemPositions) {
+    const fi = getLayerFloorItems(layer.id);
+    for (const pos of boneData.floorItemPositions) {
+      const item = generateFloorItem(layer.id);
+      if (item) fi.set(`${pos.x},${pos.y}`, item);
+    }
+  }
   console.log(`Layer ${layer.id} materialized`);
   // Notify admins
   adminiNs.emit('layerMaterialized', {
@@ -462,6 +496,147 @@ function getEnrichedLayers() {
   return result;
 }
 
+/** Check if a player is within torch radius on a layer (overlay '¥' or tile 37) */
+function isNearTorch(layer, playerId, px, py, radius) {
+  const r2 = radius * radius;
+  function checkChunks(chunkMap) {
+    for (const [key, chunk] of chunkMap) {
+      const [cx, cy] = key.split(',').map(Number);
+      const chunkMinX = cx * CHUNK_SIZE, chunkMinY = cy * CHUNK_SIZE;
+      // Bounding-box cull
+      if (px < chunkMinX - radius || px > chunkMinX + CHUNK_SIZE + radius ||
+          py < chunkMinY - radius || py > chunkMinY + CHUNK_SIZE + radius) continue;
+      // Overlay torches
+      if (chunk.overlay) {
+        for (const [ox, oy, char] of chunk.overlay) {
+          if (char === '¥') {
+            const dx = ox - px, dy = oy - py;
+            if (dx * dx + dy * dy <= r2) return true;
+          }
+        }
+      }
+      // Tile torches (TILE.TORCH = 37)
+      if (chunk.tiles) {
+        for (let i = 0; i < chunk.tiles.length; i++) {
+          if (chunk.tiles[i] === 37) {
+            const lx = i % CHUNK_SIZE, ly = (i / CHUNK_SIZE) | 0;
+            const wx = chunkMinX + lx, wy = chunkMinY + ly;
+            const dx = wx - px, dy = wy - py;
+            if (dx * dx + dy * dy <= r2) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  if (layer.type === 'static') {
+    return checkChunks(layer.chunks);
+  } else {
+    if (checkChunks(layer.bones)) return true;
+    const pd = layer.playerDungeons?.get(playerId);
+    if (pd && checkChunks(pd.chunks)) return true;
+    return false;
+  }
+}
+
+// --- Shared transition logic (module-level for admin teleport access) ---
+function executeTransition(playerId, targetLayerId) {
+  const playerSocket = io.sockets.sockets.get(playerId);
+  if (!playerSocket) return;
+  const p = players.get(playerId);
+  const color = p?.color || '#888888';
+
+  const oldLayerId = layerManager.getPlayerLayerId(playerId);
+  const oldLayer = layerManager.getLayer(oldLayerId);
+  const oldRoom = `layer:${oldLayerId}`;
+
+  // Remove wing exit before leaving dynamic layer
+  if (oldLayer && oldLayer.type === 'dynamic') {
+    removeWingExit(oldLayer, playerId);
+  }
+
+  // Despawn player's enemies on layer change
+  enemyManager.despawnForPlayer(playerId);
+
+  // Leave old layer
+  playerSocket.leave(oldRoom);
+  playerSocket.to(oldRoom).emit('playerLeft', { id: playerId });
+
+  // Join new layer
+  const newLayer = layerManager.assignPlayer(playerId, targetLayerId);
+  const newRoom = `layer:${targetLayerId}`;
+  playerSocket.join(newRoom);
+
+  // Delete old dynamic layer if now empty
+  if (oldLayer && oldLayer.type === 'dynamic' && oldLayer.players.size === 0) {
+    enemyManager.despawnForLayer(oldLayerId);
+    layerManager.deleteLayer(oldLayerId);
+    for (const key of containerState.keys()) {
+      if (key.startsWith(`${oldLayerId}:`)) containerState.delete(key);
+    }
+    layerFloorItems.delete(oldLayerId);
+    adminiNs.emit('layerDematerialized', { layerId: oldLayerId });
+  }
+
+  // Generate wing + place exit for dynamic layers
+  if (newLayer.type === 'dynamic') {
+    materializeLayer(newLayer);
+    generatePlayerWing(newLayer, playerId);
+    placeWingExit(newLayer, playerId);
+    // Notify admins about new wing
+    const pd = newLayer.playerDungeons.get(playerId);
+    if (pd) {
+      adminiNs.to(`admin:layer:${targetLayerId}`).emit('motherWingAdded', {
+        playerId, name: p?.name || '', color,
+        chunks: serializeChunkMap(pd.chunks),
+      });
+    }
+  }
+
+  // Direction-aware spawn for static layers
+  let spawn;
+  if (newLayer.type === 'static' && newLayer.getSpawnForArrival) {
+    const fromDir = targetLayerId > oldLayerId ? 'above' : 'below';
+    spawn = newLayer.getSpawnForArrival(fromDir);
+  } else {
+    spawn = newLayer.getSpawn();
+  }
+  spawn = offsetSpawn(newLayer, playerId, spawn);
+  if (p) { p.x = spawn.x; p.y = spawn.y; }
+
+  // Build player list for new layer
+  const others = [];
+  for (const [pid, pp] of players) {
+    if (pid !== playerId && layerManager.getPlayerLayerId(pid) === targetLayerId) {
+      others.push(pp);
+    }
+  }
+
+  const initialChunks = getInitialChunks(newLayer, playerId, spawn);
+  playerSocket.emit('layerData', {
+    spawn,
+    layerMeta: newLayer.getMeta(),
+    initialChunks,
+    players: others,
+    stats: p?.stats,
+    blood: serializeBlood(getLayerBlood(targetLayerId)),
+    inventory: p?.inventory,
+    equipment: p?.equipment,
+    enemies: enemyManager.getSnapshotForPlayer(playerId, targetLayerId),
+    floorItems: serializeFloorItems(getLayerFloorItems(targetLayerId)),
+  });
+
+  playerSocket.to(newRoom).emit('playerJoined', { id: playerId, color, spawn, name: p?.name || '', facing: 'south', lightRadius: p?.lightRadius || 0 });
+  console.log(`Player ${playerId} moved to layer ${targetLayerId}`);
+  broadcastLayerList();
+
+  // Notify admins
+  adminiNs.to(`admin:layer:${targetLayerId}`).emit('adminPlayerJoined', {
+    id: playerId, x: spawn.x, y: spawn.y, name: p?.name || '', color, facing: 'south',
+  });
+  adminiNs.to(`admin:layer:${oldLayerId}`).emit('adminPlayerLeft', { id: playerId });
+}
+
 io.on('connection', (socket) => {
   const id = socket.id;
   let color = '#888888'; // Default until name is set
@@ -491,6 +666,7 @@ io.on('connection', (socket) => {
     attackRange: 1,
     attackSpeed: 1000,
     lastAttackTime: 0,
+    lightRadius: 0,
   });
 
   // Build same-layer player list
@@ -516,9 +692,10 @@ io.on('connection', (socket) => {
     inventory: p.inventory,
     equipment: p.equipment,
     enemies: enemyManager.getSnapshotForPlayer(id, layerId),
+    floorItems: serializeFloorItems(getLayerFloorItems(layerId)),
   });
 
-  socket.to(roomName).emit('playerJoined', { id, color, spawn, name: '', facing: 'south' });
+  socket.to(roomName).emit('playerJoined', { id, color, spawn, name: '', facing: 'south', lightRadius: 0 });
   console.log(`Player ${id} joined layer ${layerId} at (${spawn.x}, ${spawn.y})`);
   broadcastLayerList();
 
@@ -553,6 +730,7 @@ io.on('connection', (socket) => {
 
     data.id = id;
     data.color = color;
+    data.lightRadius = p.lightRadius || 0;
     const playerLayerId = layerManager.getPlayerLayerId(id);
     socket.to(`layer:${playerLayerId}`).volatile.emit('playerState', data);
 
@@ -711,100 +889,6 @@ io.on('connection', (socket) => {
   });
 
 
-  // --- Shared transition logic ---
-  function executeTransition(targetLayerId) {
-    const oldLayerId = layerManager.getPlayerLayerId(id);
-    const oldLayer = layerManager.getLayer(oldLayerId);
-    const oldRoom = `layer:${oldLayerId}`;
-
-    // Remove wing exit before leaving dynamic layer
-    if (oldLayer && oldLayer.type === 'dynamic') {
-      removeWingExit(oldLayer, id);
-    }
-
-    // Despawn player's enemies on layer change (they'll respawn on new layer)
-    enemyManager.despawnForPlayer(id);
-
-    // Leave old layer
-    socket.leave(oldRoom);
-    socket.to(oldRoom).emit('playerLeft', { id });
-
-    // Join new layer
-    const newLayer = layerManager.assignPlayer(id, targetLayerId);
-    const newRoom = `layer:${targetLayerId}`;
-    socket.join(newRoom);
-
-    // Delete old dynamic layer if now empty
-    if (oldLayer && oldLayer.type === 'dynamic' && oldLayer.players.size === 0) {
-      enemyManager.despawnForLayer(oldLayerId);
-      layerManager.deleteLayer(oldLayerId);
-      for (const key of containerState.keys()) {
-        if (key.startsWith(`${oldLayerId}:`)) containerState.delete(key);
-      }
-      adminiNs.emit('layerDematerialized', { layerId: oldLayerId });
-    }
-
-    // Generate wing + place exit for dynamic layers
-    if (newLayer.type === 'dynamic') {
-      materializeLayer(newLayer);
-      generatePlayerWing(newLayer, id);
-      placeWingExit(newLayer, id);
-      // Notify admins about new wing
-      const pd = newLayer.playerDungeons.get(id);
-      if (pd) {
-        const p = players.get(id);
-        adminiNs.to(`admin:layer:${targetLayerId}`).emit('motherWingAdded', {
-          playerId: id, name: p?.name || '', color,
-          chunks: serializeChunkMap(pd.chunks),
-        });
-      }
-    }
-
-    // Direction-aware spawn for static layers
-    let spawn;
-    if (newLayer.type === 'static' && newLayer.getSpawnForArrival) {
-      const fromDir = targetLayerId > oldLayerId ? 'above' : 'below';
-      spawn = newLayer.getSpawnForArrival(fromDir);
-    } else {
-      spawn = newLayer.getSpawn();
-    }
-    // Offset spawn so player lands near the exit, not on top of it
-    spawn = offsetSpawn(newLayer, id, spawn);
-    const p = players.get(id);
-    if (p) { p.x = spawn.x; p.y = spawn.y; }
-
-    // Build player list for new layer
-    const others = [];
-    for (const [pid, pp] of players) {
-      if (pid !== id && layerManager.getPlayerLayerId(pid) === targetLayerId) {
-        others.push(pp);
-      }
-    }
-
-    const initialChunks = getInitialChunks(newLayer, id, spawn);
-    socket.emit('layerData', {
-      spawn,
-      layerMeta: newLayer.getMeta(),
-      initialChunks,
-      players: others,
-      stats: p?.stats,
-      blood: serializeBlood(getLayerBlood(targetLayerId)),
-      inventory: p?.inventory,
-      equipment: p?.equipment,
-      enemies: enemyManager.getSnapshotForPlayer(id, targetLayerId),
-    });
-
-    socket.to(newRoom).emit('playerJoined', { id, color, spawn, name: p?.name || '', facing: 'south' });
-    console.log(`Player ${id} moved to layer ${targetLayerId}`);
-    broadcastLayerList();
-
-    // Notify admins
-    adminiNs.to(`admin:layer:${targetLayerId}`).emit('adminPlayerJoined', {
-      id, x: spawn.x, y: spawn.y, name: p?.name || '', color, facing: 'south',
-    });
-    adminiNs.to(`admin:layer:${oldLayerId}`).emit('adminPlayerLeft', { id });
-  }
-
   // --- Layer transition (admin/debug) ---
   socket.on('changeLayer', (data) => {
     const targetLayerId = data.layerId;
@@ -812,7 +896,7 @@ io.on('connection', (socket) => {
     if (targetLayerId > 0) ensureDynamicLayer(targetLayerId);
     const targetLayer = layerManager.getLayer(targetLayerId);
     if (!targetLayer) return;
-    executeTransition(targetLayerId);
+    executeTransition(id, targetLayerId);
   });
 
   // --- ENTRY tile transition (dungeon descent) ---
@@ -875,7 +959,7 @@ io.on('connection', (socket) => {
     if (!targetLayer) return;
 
     console.log(`Player ${id} entering exit: L${currentLayerId} → L${targetDepth}`);
-    executeTransition(targetDepth);
+    executeTransition(id, targetDepth);
   });
 
   // --- Inventory / Equipment / Container handlers ---
@@ -907,30 +991,32 @@ io.on('connection', (socket) => {
 
     // Try to add items to player inventory
     const added = [];
-    let full = false;
+    const remaining = [];
     for (const item of cState.items) {
       if (addToInventory(p, { ...item })) {
         added.push(item);
       } else {
-        full = true;
+        remaining.push(item);
       }
     }
-    // Clear container after looting
-    cState.items = [];
+    cState.items = remaining;
 
     let message = '';
-    if (added.length === 0 && !full) {
+    if (added.length === 0 && remaining.length === 0) {
       message = 'Empty container.';
     } else if (added.length > 0) {
       const names = added.map(i => i.name).join(', ');
       message = `Found: ${names}`;
-      if (full) message += ' (Inventory full!)';
+      if (remaining.length > 0) message += ' (Inventory full!)';
     } else {
       message = 'Inventory full!';
     }
 
     sendInventoryUpdate(socket, p);
-    socket.emit('containerResult', { x, y, items: added, message });
+    // Only mark as opened on client if fully looted
+    const result = { items: added, message };
+    if (remaining.length === 0) { result.x = x; result.y = y; }
+    socket.emit('containerResult', result);
   });
 
   socket.on('useItem', (data) => {
@@ -946,6 +1032,32 @@ io.on('connection', (socket) => {
       if (item.effect.removeBleed && p.stats) {
         p.stats.bleedStacks = Math.max(0, p.stats.bleedStacks - item.effect.removeBleed);
       }
+      if (item.effect.healLimb && p.stats) {
+        const damaged = p.stats.limbs
+          .filter(l => l.hp > 0 && l.hp < l.maxHp)
+          .sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
+        let remaining = item.effect.healLimb;
+        for (const limb of damaged) {
+          if (remaining <= 0) break;
+          const h = Math.min(limb.maxHp - limb.hp, remaining);
+          limb.hp += h;
+          remaining -= h;
+        }
+      }
+      if (item.effect.restoreSanity && p.stats) {
+        p.stats.sanity = Math.min(p.stats.maxSanity, p.stats.sanity + item.effect.restoreSanity);
+      }
+      if (item.effect.sanityDrain && p.stats) {
+        p.stats.sanity = Math.max(0, p.stats.sanity - item.effect.sanityDrain);
+      }
+      if (item.effect.reviveLimb && p.stats) {
+        const severed = p.stats.limbs
+          .filter(l => l.hp <= 0)
+          .sort((a, b) => a.hp - b.hp);
+        if (severed.length > 0) {
+          severed[0].hp = item.effect.reviveLimb;
+        }
+      }
     }
 
     // Decrement count or remove
@@ -955,8 +1067,7 @@ io.on('connection', (socket) => {
     }
 
     sendInventoryUpdate(socket, p);
-    // Also send updated stats if bleed changed
-    if (item.effect && item.effect.removeBleed) {
+    if (item.effect) {
       socket.emit('damage', { stats: p.stats });
     }
   });
@@ -976,38 +1087,51 @@ io.on('connection', (socket) => {
       // Two-handed: need both mainHand and offHand empty (or swap)
       const mh = p.equipment.mainHand;
       const oh = p.equipment.offHand;
-      if (mh || oh) {
-        // Try to unequip existing items first
-        if (mh && mh !== oh) {
-          // Find empty slots for displaced items
-          let slot1 = -1;
-          for (let i = 0; i < 8; i++) {
-            if (!p.inventory[i] || i === slot) { slot1 = i; break; }
-          }
-          if (slot1 < 0) return; // No room
-          if (slot1 !== slot) p.inventory[slot1] = mh;
-        }
-        if (oh && oh !== mh) {
-          let slot2 = -1;
-          for (let i = 0; i < 8; i++) {
-            if (!p.inventory[i] && i !== slot) { slot2 = i; break; }
-          }
-          if (slot2 < 0) return;
-          p.inventory[slot2] = oh;
+
+      // Check if there's room for displaced items
+      let slotsNeeded = 0;
+      if (mh && mh !== oh) slotsNeeded++;
+      if (oh && oh !== mh) slotsNeeded++;
+      let emptyCount = 0;
+      for (let i = 0; i < 8; i++) {
+        if (!p.inventory[i] || i === slot) emptyCount++;
+      }
+      if (emptyCount < slotsNeeded) return;
+
+      // Clear weapon slot first so it's available for displaced items
+      p.inventory[slot] = null;
+
+      if (mh && mh !== oh) {
+        for (let i = 0; i < 8; i++) {
+          if (!p.inventory[i]) { p.inventory[i] = mh; break; }
         }
       }
-      p.inventory[slot] = null;
+      if (oh && oh !== mh) {
+        for (let i = 0; i < 8; i++) {
+          if (!p.inventory[i]) { p.inventory[i] = oh; break; }
+        }
+      }
+
       p.equipment.mainHand = item;
       p.equipment.offHand = item; // Same reference, OH dimmed on client
     } else {
       // Single slot equip
       const existing = p.equipment[targetSlot];
-      p.inventory[slot] = existing || null; // Swap back to hotbar slot
+      if (existing && existing.twoHanded) {
+        // Displacing a 2H weapon — clear both slots
+        p.equipment.mainHand = null;
+        p.equipment.offHand = null;
+        p.inventory[slot] = existing;
+      } else {
+        p.inventory[slot] = existing || null; // Swap back to hotbar slot
+      }
       p.equipment[targetSlot] = item;
     }
 
     recomputeEquipment(p);
     sendInventoryUpdate(socket, p);
+    const eqLayerId = layerManager.getPlayerLayerId(id);
+    socket.to(`layer:${eqLayerId}`).emit('playerState', { id, lightRadius: p.lightRadius || 0 });
   });
 
   socket.on('unequipItem', (data) => {
@@ -1046,6 +1170,8 @@ io.on('connection', (socket) => {
 
     recomputeEquipment(p);
     sendInventoryUpdate(socket, p);
+    const ueqLayerId = layerManager.getPlayerLayerId(id);
+    socket.to(`layer:${ueqLayerId}`).emit('playerState', { id, lightRadius: p.lightRadius || 0 });
   });
 
   socket.on('swapSlots', (data) => {
@@ -1058,6 +1184,68 @@ io.on('connection', (socket) => {
     p.inventory[a] = p.inventory[b];
     p.inventory[b] = tmp;
     sendInventoryUpdate(socket, p);
+  });
+
+  // --- Floor item pickup ---
+  socket.on('pickupItem', () => {
+    const p = players.get(id);
+    if (!p) return;
+    const currentLayerId = layerManager.getPlayerLayerId(id);
+    const fi = getLayerFloorItems(currentLayerId);
+    const key = `${p.x},${p.y}`;
+    const item = fi.get(key);
+    if (!item) return;
+
+    if (!addToInventory(p, { ...item })) {
+      socket.emit('containerResult', { message: 'Inventory full!' });
+      return;
+    }
+
+    fi.delete(key);
+    sendInventoryUpdate(socket, p);
+    socket.emit('containerResult', { message: `Picked up: ${item.name}` });
+    socket.to(`layer:${currentLayerId}`).emit('floorItemRemoved', { x: p.x, y: p.y });
+    socket.emit('floorItemRemoved', { x: p.x, y: p.y });
+  });
+
+  // --- Drop item ---
+  socket.on('dropItem', ({ slot, isEquip }) => {
+    const p = players.get(id);
+    if (!p) return;
+    const currentLayerId = layerManager.getPlayerLayerId(id);
+    const fi = getLayerFloorItems(currentLayerId);
+    const key = `${p.x},${p.y}`;
+
+    if (fi.has(key)) {
+      socket.emit('containerResult', { message: "Can't drop here!" });
+      return;
+    }
+
+    let item = null;
+    if (isEquip) {
+      if (!EQUIP_SLOTS.includes(slot)) return;
+      item = p.equipment[slot];
+      if (!item) return;
+      if (item.twoHanded) {
+        p.equipment.mainHand = null;
+        p.equipment.offHand = null;
+      } else {
+        p.equipment[slot] = null;
+      }
+      recomputeEquipment(p);
+      socket.to(`layer:${currentLayerId}`).emit('playerState', { id, lightRadius: p.lightRadius || 0 });
+    } else {
+      if (typeof slot !== 'number' || slot < 0 || slot >= 8) return;
+      item = p.inventory[slot];
+      if (!item) return;
+      p.inventory[slot] = null;
+    }
+
+    fi.set(key, item);
+    sendInventoryUpdate(socket, p);
+    const broadcastData = { x: p.x, y: p.y, item };
+    socket.emit('floorItemAdded', broadcastData);
+    socket.to(`layer:${currentLayerId}`).emit('floorItemAdded', broadcastData);
   });
 
   // --- Shop handlers ---
@@ -1099,6 +1287,8 @@ io.on('connection', (socket) => {
         name: def.name,
         char: def.char,
         rarity: def.rarity,
+        sprite: def.sprite,
+        description: def.description || '',
         buyPrice: Math.ceil((def.value || 0) * shop.buyMarkup),
         stock: entry.stock,
       };
@@ -1159,7 +1349,22 @@ io.on('connection', (socket) => {
     debouncedSave(currentLayer);
     sendInventoryUpdate(socket, p);
 
-    // Resend shop data with updated stock
+    socket.emit('shopResult', { success: true, gold: p.stats.gold });
+    resendShopData(shop);
+  });
+
+  // Helper: add sold item to shop inventory and resend shopData
+  function addSoldItemToShop(shop, itemId, currentLayer) {
+    const existing = shop.inventory.find(e => e.itemId === itemId);
+    if (existing) {
+      existing.stock++;
+    } else {
+      shop.inventory.push({ itemId, stock: 1, maxStock: -1, refillTime: 0, lastRefill: 0 });
+    }
+    debouncedSave(currentLayer);
+  }
+
+  function resendShopData(shop) {
     const pricedItems = shop.inventory.map(e => {
       const d = getItemDef(e.itemId);
       if (!d) return null;
@@ -1168,12 +1373,12 @@ io.on('connection', (socket) => {
         name: d.name,
         char: d.char,
         rarity: d.rarity,
+        sprite: d.sprite,
+        description: d.description || '',
         buyPrice: Math.ceil((d.value || 0) * shop.buyMarkup),
         stock: e.stock,
       };
     }).filter(Boolean);
-
-    socket.emit('shopResult', { success: true, gold: p.stats.gold });
     socket.emit('shopData', {
       shopId: shop.id,
       shopName: shop.name,
@@ -1181,7 +1386,7 @@ io.on('connection', (socket) => {
       sellMarkup: shop.sellMarkup,
       inventory: pricedItems,
     });
-  });
+  }
 
   socket.on('sellToShop', (data) => {
     const p = players.get(id);
@@ -1215,8 +1420,56 @@ io.on('connection', (socket) => {
     // Add gold
     p.stats.gold += sellPrice;
 
+    // Add to shop inventory
+    addSoldItemToShop(shop, item.id, currentLayer);
+
     sendInventoryUpdate(socket, p);
     socket.emit('shopResult', { success: true, gold: p.stats.gold });
+    resendShopData(shop);
+  });
+
+  socket.on('sellEquippedToShop', (data) => {
+    const p = players.get(id);
+    if (!p || p.openShopId === undefined) return;
+    const { shopId, equipSlot } = data;
+    if (shopId !== p.openShopId) return;
+    if (!EQUIP_SLOTS.includes(equipSlot)) return;
+
+    const item = p.equipment[equipSlot];
+    if (!item) return;
+
+    const currentLayer = layerManager.getLayer(p.openShopLayerId);
+    if (!currentLayer) return;
+
+    const shop = currentLayer.shops.find(s => s.id === shopId);
+    if (!shop) return;
+
+    const sellPrice = Math.floor((item.value || 0) * shop.sellMarkup);
+    if (sellPrice <= 0) {
+      socket.emit('shopResult', { success: false, message: 'Cannot sell this item.' });
+      return;
+    }
+
+    // Remove from equipment (handle two-handed)
+    if (item.twoHanded) {
+      p.equipment.mainHand = null;
+      p.equipment.offHand = null;
+    } else {
+      p.equipment[equipSlot] = null;
+    }
+
+    // Add gold
+    p.stats.gold += sellPrice;
+
+    // Add to shop inventory
+    addSoldItemToShop(shop, item.id, currentLayer);
+
+    recomputeEquipment(p);
+    sendInventoryUpdate(socket, p);
+    const eqLayerId = layerManager.getPlayerLayerId(id);
+    socket.to(`layer:${eqLayerId}`).emit('playerState', { id, lightRadius: p.lightRadius || 0 });
+    socket.emit('shopResult', { success: true, gold: p.stats.gold });
+    resendShopData(shop);
   });
 
   socket.on('closeShop', () => {
@@ -1263,6 +1516,7 @@ io.on('connection', (socket) => {
       for (const key of containerState.keys()) {
         if (key.startsWith(`${playerLayerId}:`)) containerState.delete(key);
       }
+      layerFloorItems.delete(playerLayerId);
       adminiNs.emit('layerDematerialized', { layerId: playerLayerId });
     }
     console.log(`Player ${id} left layer ${playerLayerId}`);
@@ -1683,6 +1937,26 @@ adminiNs.on('connection', (socket) => {
     socket.broadcast.emit('itemDeleted', { id: itemId });
   });
 
+  // --- Give item to player ---
+  socket.on('giveItem', ({ playerId, itemId }) => {
+    if (!playerId || !itemId) return;
+    const p = players.get(playerId);
+    if (!p) return socket.emit('giveItemResult', { success: false, message: 'Player not found' });
+
+    const def = getItemDef(itemId);
+    if (!def) return socket.emit('giveItemResult', { success: false, message: 'Item not found' });
+
+    const instance = createItemInstance(def);
+    if (!addToInventory(p, instance)) {
+      return socket.emit('giveItemResult', { success: false, message: 'Inventory full' });
+    }
+
+    const playerSocket = io.sockets.sockets.get(playerId);
+    if (playerSocket) sendInventoryUpdate(playerSocket, p);
+
+    socket.emit('giveItemResult', { success: true, message: `Gave ${def.name} to ${p.name || 'player'}` });
+  });
+
   // --- Enemy types ---
   socket.on('getEnemyTypes', () => {
     socket.emit('enemyTypeList', getEnemyTypes());
@@ -1749,6 +2023,26 @@ adminiNs.on('connection', (socket) => {
       weights: [...b.weights],
     }));
     socket.emit('rarityWeightsSaved', savedData);
+  });
+
+  // --- Admin teleport: drag player to another layer ---
+  socket.on('adminTeleport', ({ playerId, targetLayerId }) => {
+    if (!playerId || targetLayerId === undefined) return;
+    const p = players.get(playerId);
+    if (!p) return socket.emit('adminTeleportResult', { success: false, message: 'Player not found' });
+
+    const currentLayerId = layerManager.getPlayerLayerId(playerId);
+    if (currentLayerId === targetLayerId) return socket.emit('adminTeleportResult', { success: false, message: 'Already on that layer' });
+
+    const playerSocket = io.sockets.sockets.get(playerId);
+    if (!playerSocket) return socket.emit('adminTeleportResult', { success: false, message: 'Player socket not found' });
+
+    // Ensure target layer exists
+    if (targetLayerId > 0) ensureDynamicLayer(targetLayerId);
+    if (!layerManager.getLayer(targetLayerId)) return socket.emit('adminTeleportResult', { success: false, message: 'Target layer not found' });
+
+    executeTransition(playerId, targetLayerId);
+    socket.emit('adminTeleportResult', { success: true, message: `Teleported ${p.name || 'player'} to L${targetLayerId}` });
   });
 
   socket.on('disconnect', () => {
@@ -1835,6 +2129,15 @@ function generatePlayerWing(layer, playerId) {
   pd.rooms = wingData.rooms;
   pd.doors = wingData.doors;
   layer.playerDungeons.set(playerId, pd);
+
+  // Spawn floor items from wing rooms
+  if (wingData.floorItemPositions) {
+    const fi = getLayerFloorItems(layer.id);
+    for (const pos of wingData.floorItemPositions) {
+      const item = generateFloorItem(layer.id);
+      if (item) fi.set(`${pos.x},${pos.y}`, item);
+    }
+  }
 }
 
 /** Place a wing exit ENTRY tile for a player, promoted to bones for shared visibility */
@@ -1965,6 +2268,10 @@ setInterval(() => {
     const reducedDamage = Math.max(1, p.activeDamage - closest.armor);
     closest.hp -= reducedDamage;
     closest.bleedStacks += Math.floor(reducedDamage / 5);
+    // poisonOnHit: add extra bleed stacks from equipment
+    for (const eff of p.equipEffects) {
+      if (eff.poisonOnHit) closest.bleedStacks += eff.poisonOnHit;
+    }
 
     // Face player toward enemy
     const dx = closest.x - p.x;
@@ -1992,6 +2299,18 @@ setInterval(() => {
       });
       // Also broadcast facing change
       sock.to(`layer:${playerLayerId}`).emit('playerState', { id: playerId, facing: p.facing });
+      // Broadcast remote attack for layer-based enemies
+      if (closest.ownerType === 'layer') {
+        sock.to(`layer:${playerLayerId}`).emit('remoteAttack', {
+          attackerId: playerId,
+          attackerX: p.x,
+          attackerY: p.y,
+          enemyId: closest.id,
+          damage: reducedDamage,
+          enemyHp: closest.hp,
+          enemyMaxHp: closest.maxHp,
+        });
+      }
     }
 
     // Kill enemy if dead
@@ -2029,6 +2348,42 @@ setInterval(() => {
   }
   for (const eid of toKill) enemyManager.killEnemy(eid);
 }, 2000);
+
+// Sanity tick: drain on dynamic layers (torch/lantern slow it), refill on static layers
+setInterval(() => {
+  for (const [playerId, p] of players) {
+    if (!p.stats) continue;
+    const layerId = layerManager.getPlayerLayerId(playerId);
+    if (layerId === undefined) continue;
+    const layer = layerManager.getLayer(layerId);
+    if (!layer) continue;
+
+    if (layer.type === 'dynamic') {
+      if (p.stats.sanity <= 0) continue;
+      let drain = 1;
+      // Check lantern (sanityShield from equipment)
+      let hasLantern = false;
+      for (const eff of (p.equipEffects || [])) {
+        if (eff.sanityShield) { hasLantern = true; drain *= (1 - eff.sanityShield); break; }
+      }
+      // Torch proximity slows drain (doesn't stack with lantern)
+      if (!hasLantern && isNearTorch(layer, playerId, p.x, p.y, 5)) {
+        drain *= 0.5;
+      }
+      drain = Math.max(0, drain);
+      if (drain > 0) {
+        p.stats.sanity = Math.max(0, p.stats.sanity - drain);
+        const sock = io.sockets.sockets.get(playerId);
+        if (sock) sock.emit('damage', { stats: p.stats });
+      }
+    } else if (layer.type === 'static') {
+      if (p.stats.sanity >= p.stats.maxSanity) continue;
+      p.stats.sanity = Math.min(p.stats.maxSanity, p.stats.sanity + 1);
+      const sock = io.sockets.sockets.get(playerId);
+      if (sock) sock.emit('damage', { stats: p.stats });
+    }
+  }
+}, 30000);
 
 http.listen(PORT, () => {
   console.log(`Den server running on http://localhost:${PORT}`);

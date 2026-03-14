@@ -58,11 +58,15 @@ function castLight(gameMap, cx, cy, radius, row, startSlope, endSlope, octant) {
 
 function applyCornerGrace(gameMap, playerX, playerY, fovRadius, graceRadius) {
   const toReveal = [];
+  const worldMinX = gameMap.offsetX;
+  const worldMinY = gameMap.offsetY;
+  const worldMaxX = gameMap.offsetX + gameMap.width;
+  const worldMaxY = gameMap.offsetY + gameMap.height;
 
-  for (let y = Math.max(0, playerY - fovRadius - graceRadius);
-       y <= Math.min(gameMap.height - 1, playerY + fovRadius + graceRadius); y++) {
-    for (let x = Math.max(0, playerX - fovRadius - graceRadius);
-         x <= Math.min(gameMap.width - 1, playerX + fovRadius + graceRadius); x++) {
+  for (let y = Math.max(worldMinY, playerY - fovRadius - graceRadius);
+       y <= Math.min(worldMaxY - 1, playerY + fovRadius + graceRadius); y++) {
+    for (let x = Math.max(worldMinX, playerX - fovRadius - graceRadius);
+         x <= Math.min(worldMaxX - 1, playerX + fovRadius + graceRadius); x++) {
       if (!gameMap.isVisible(x, y)) continue;
 
       // Check if this visible tile is at an edge (next to non-visible)
@@ -72,7 +76,7 @@ function applyCornerGrace(gameMap, playerX, playerY, fovRadius, graceRadius) {
           if (ddx === 0 && ddy === 0) continue;
           const nx = x + ddx;
           const ny = y + ddy;
-          if (nx >= 0 && nx < gameMap.width && ny >= 0 && ny < gameMap.height && !gameMap.isVisible(nx, ny)) {
+          if (nx >= worldMinX && nx < worldMaxX && ny >= worldMinY && ny < worldMaxY && !gameMap.isVisible(nx, ny)) {
             isEdge = true;
             break;
           }
@@ -88,7 +92,7 @@ function applyCornerGrace(gameMap, playerX, playerY, fovRadius, graceRadius) {
           if (dx === 0 && dy === 0) continue;
           const peekX = x + dx;
           const peekY = y + dy;
-          if (peekX < 0 || peekX >= gameMap.width || peekY < 0 || peekY >= gameMap.height) continue;
+          if (peekX < worldMinX || peekX >= worldMaxX || peekY < worldMinY || peekY >= worldMaxY) continue;
           if (gameMap.isVisible(peekX, peekY)) continue;
 
           const distFromPlayer = Math.sqrt((peekX - playerX) ** 2 + (peekY - playerY) ** 2);

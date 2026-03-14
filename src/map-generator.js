@@ -276,6 +276,25 @@ export function generateDungeon(width, height, roomCount = 35) {
     }
   }
 
+  // --- Floor item positions (~5% per room) ---
+  const floorItemPositions = [];
+  for (const room of rooms) {
+    if (Math.random() < 0.05) {
+      const candidates = [];
+      for (let ry = room.y + 1; ry < room.y + room.h - 1; ry++) {
+        for (let rx = room.x + 1; rx < room.x + room.w - 1; rx++) {
+          const t = get(rx, ry);
+          if ((t === TILE.FLOOR || t === TILE.STONE) && !overlay.has(overlayKey(rx, ry))) {
+            candidates.push({ x: rx, y: ry });
+          }
+        }
+      }
+      if (candidates.length > 0) {
+        floorItemPositions.push(candidates[Math.floor(Math.random() * candidates.length)]);
+      }
+    }
+  }
+
   const overlayArray = [];
   for (const [key, val] of overlay) {
     const x = key >> 16;
@@ -285,7 +304,7 @@ export function generateDungeon(width, height, roomCount = 35) {
 
   console.log(`BSP generated: ${rooms.length} rooms, ${doors.length} doors`);
 
-  return { map, rooms, doors, overlay: overlayArray, width, height };
+  return { map, rooms, doors, overlay: overlayArray, width, height, floorItemPositions };
 }
 
 // --- BSP Split ---
@@ -1168,6 +1187,25 @@ export function generateWing(playerSeed, boneRooms, boneChunks, layerWidth, laye
     }
   }
 
+  // Floor item positions (~5% per room)
+  const floorItemPositions = [];
+  for (const room of rooms) {
+    if (rng() < 0.05) {
+      const candidates = [];
+      for (let ry = room.y + 1; ry < room.y + room.h - 1; ry++) {
+        for (let rx = room.x + 1; rx < room.x + room.w - 1; rx++) {
+          const t = get(rx, ry);
+          if ((t === TILE.FLOOR || t === TILE.GRASS || t === TILE.STONE) && !overlay.has(overlayKey(rx, ry))) {
+            candidates.push({ x: rx, y: ry });
+          }
+        }
+      }
+      if (candidates.length > 0) {
+        floorItemPositions.push(candidates[Math.floor(rng() * candidates.length)]);
+      }
+    }
+  }
+
   const overlayArray = [];
   for (const [key, val] of overlay) {
     const ox = key >> 16;
@@ -1210,7 +1248,7 @@ export function generateWing(playerSeed, boneRooms, boneChunks, layerWidth, laye
   }
 
   console.log(`Wing generated: ${rooms.length} rooms`);
-  return { chunks, rooms, doors };
+  return { chunks, rooms, doors, floorItemPositions };
 }
 
 function packCoord(x, y) {

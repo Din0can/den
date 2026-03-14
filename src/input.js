@@ -5,6 +5,7 @@ import { sendEquipItem, sendUnequipItem, sendUseItem, sendSwapSlots, sendCloseSh
 const keys = {};
 let interactPressed = false;
 let escapePressed = false;
+let dropPressed = false;
 let lastClickTime = 0;
 let lastClickSlot = -1;
 let lastClickEquip = null;
@@ -23,6 +24,9 @@ export function initInput() {
     }
     if (e.code === 'Escape') {
       escapePressed = true;
+    }
+    if (e.code === 'KeyX') {
+      dropPressed = true;
     }
     // Shop mode navigation
     const shopState = getHotbarState();
@@ -308,6 +312,15 @@ export function consumeInteract() {
 export function consumeEscape() {
   if (escapePressed) {
     escapePressed = false;
+    return true;
+  }
+  return false;
+}
+
+/** Returns true once per X key press */
+export function consumeDrop() {
+  if (dropPressed) {
+    dropPressed = false;
     return true;
   }
   return false;

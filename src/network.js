@@ -38,6 +38,10 @@ export function connect() {
   socket.on('playerAttack', (data) => handlers.onPlayerAttack?.(data));
   socket.on('enemyDied', (data) => handlers.onEnemyDied?.(data));
   socket.on('enemyHpUpdate', (data) => handlers.onEnemyHpUpdate?.(data));
+  socket.on('remoteAttack', (data) => handlers.onRemoteAttack?.(data));
+  socket.on('remoteCombatHit', (data) => handlers.onRemoteCombatHit?.(data));
+  socket.on('floorItemAdded', (data) => handlers.onFloorItemAdded?.(data));
+  socket.on('floorItemRemoved', (data) => handlers.onFloorItemRemoved?.(data));
 
   socket.on('connect', () => console.log('Connected:', socket.id));
   socket.on('disconnect', () => console.log('Disconnected'));
@@ -61,6 +65,10 @@ export function onCombatHit(fn) { handlers.onCombatHit = fn; }
 export function onPlayerAttack(fn) { handlers.onPlayerAttack = fn; }
 export function onEnemyDied(fn) { handlers.onEnemyDied = fn; }
 export function onEnemyHpUpdate(fn) { handlers.onEnemyHpUpdate = fn; }
+export function onRemoteAttack(fn) { handlers.onRemoteAttack = fn; }
+export function onRemoteCombatHit(fn) { handlers.onRemoteCombatHit = fn; }
+export function onFloorItemAdded(fn) { handlers.onFloorItemAdded = fn; }
+export function onFloorItemRemoved(fn) { handlers.onFloorItemRemoved = fn; }
 
 export function sendState(x, y, facing) {
   if (!socket) return;
@@ -134,11 +142,23 @@ export function sendSellToShop(shopId, hotbarSlot) {
   throttledEmit('sellToShop', { shopId, hotbarSlot });
 }
 
+export function sendSellEquipped(shopId, equipSlot) {
+  throttledEmit('sellEquippedToShop', { shopId, equipSlot });
+}
+
 export function sendCloseShop() {
   if (!socket) return;
   socket.emit('closeShop');
 }
 
+
+export function sendPickupItem() {
+  throttledEmit('pickupItem', {});
+}
+
+export function sendDropItem(slot, isEquip) {
+  throttledEmit('dropItem', { slot, isEquip });
+}
 
 export function sendDebugSanity(sanity) {
   if (!socket) return;

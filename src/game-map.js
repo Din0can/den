@@ -5,6 +5,8 @@ export class GameMap {
   constructor() {
     this.width = 0;
     this.height = 0;
+    this.offsetX = 0;
+    this.offsetY = 0;
     this.chunks = new Map();        // chunkKey -> Uint8Array(CHUNK_SIZE²)
     this.visible = new Uint8Array(0);
     this.explored = new Uint8Array(0);
@@ -18,6 +20,7 @@ export class GameMap {
     this.shops = new Map();         // packed coord -> shop object
     this._allShops = [];            // flat list
     this.blood = new Map();         // packed coord -> bitmask (quadrants)
+    this.floorItems = new Map();    // packed coord -> item instance
   }
 
   /** Initialize map dimensions and allocate visibility arrays */
@@ -31,6 +34,8 @@ export class GameMap {
 
   /** Initialize from layer metadata bounds (call before loadChunks) */
   initBounds(bounds) {
+    this.offsetX = bounds.minX;
+    this.offsetY = bounds.minY;
     this._initArrays(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
     this.chunks.clear();
     this.overlay = new Map();
@@ -42,10 +47,13 @@ export class GameMap {
     this.shops = new Map();
     this._allShops = [];
     this.blood = new Map();
+    this.floorItems = new Map();
   }
 
   /** Load from flat array (backward-compat: converts to chunks internally) */
   load(data, width, height) {
+    this.offsetX = 0;
+    this.offsetY = 0;
     this._initArrays(width, height);
     this.chunks.clear();
     this.overlay = new Map();
@@ -81,7 +89,19 @@ export class GameMap {
   /** Load chunks from server chunk data array */
   loadChunks(chunksArray) {
     for (const chunk of chunksArray) {
-      this.chunks.set(chunkKey(chunk.cx, chunk.cy), new Uint8Array(chunk.tiles));
+      const tiles = new Uint8Array(chunk.tiles);
+      this.chunks.set(chunkKey(chunk.cx, chunk.cy), tiles);
+      // Scan for torch tiles (TILE.TORCH = 37) and register in torchOverlay
+      for (let i = 0; i < tiles.length; i++) {
+        if (tiles[i] === TILE.TORCH) {
+          const lx = i % CHUNK_SIZE;
+          const ly = (i / CHUNK_SIZE) | 0;
+          const wx = chunk.cx * CHUNK_SIZE + lx;
+          const wy = chunk.cy * CHUNK_SIZE + ly;
+          const key = this._overlayKey(wx, wy);
+          this.torchOverlay.set(key, { char: '¥', color: '#FF6600', passable: false });
+        }
+      }
       if (chunk.overlay) {
         for (const [x, y, char, color, passable] of chunk.overlay) {
           const key = this._overlayKey(x, y);
@@ -159,6 +179,15 @@ export class GameMap {
       this.chunks.set(key, chunk);
     }
     chunk[chunkIndex(lx, ly)] = tile;
+    // Maintain torchOverlay for torch tiles
+    const oKey = this._overlayKey(x, y);
+    if (tile === TILE.TORCH) {
+      this.torchOverlay.set(oKey, { char: '¥', color: '#FF6600', passable: false });
+    } else {
+      // Only remove if there's no overlay torch at this position
+      const ov = this.overlay.get(oKey);
+      if (!ov || ov.char !== '¥') this.torchOverlay.delete(oKey);
+    }
   }
 
   isPassable(x, y) {
@@ -172,37 +201,46 @@ export class GameMap {
   }
 
   blocksLight(x, y) {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return true;
+    const lx = x - this.offsetX;
+    const ly = y - this.offsetY;
+    if (lx < 0 || lx >= this.width || ly < 0 || ly >= this.height) return true;
     const t = this.getTile(x, y);
     const meta = TILE_META[t];
     return meta ? meta.blocksLight : true;
   }
 
-  // --- Visibility ---
+  // --- Visibility --- (all methods accept world coordinates)
   setVisible(x, y) {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return;
-    const idx = y * this.width + x;
+    const lx = x - this.offsetX;
+    const ly = y - this.offsetY;
+    if (lx < 0 || lx >= this.width || ly < 0 || ly >= this.height) return;
+    const idx = ly * this.width + lx;
     this.visible[idx] = 1;
     this.explored[idx] = 1;
   }
 
   isVisible(x, y) {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
-    return this.visible[y * this.width + x] === 1;
+    const lx = x - this.offsetX;
+    const ly = y - this.offsetY;
+    if (lx < 0 || lx >= this.width || ly < 0 || ly >= this.height) return false;
+    return this.visible[ly * this.width + lx] === 1;
   }
 
   isExplored(x, y) {
-    if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false;
-    return this.explored[y * this.width + x] === 1;
+    const lx = x - this.offsetX;
+    const ly = y - this.offsetY;
+    if (lx < 0 || lx >= this.width || ly < 0 || ly >= this.height) return false;
+    return this.explored[ly * this.width + lx] === 1;
   }
 
   resetVisibility() {
     this.previousVisible.clear();
     for (let i = 0; i < this.visible.length; i++) {
       if (this.visible[i]) {
-        const x = i % this.width;
-        const y = (i / this.width) | 0;
-        this.previousVisible.add((x << 16) | (y & 0xFFFF));
+        // Store world coordinates in previousVisible
+        const wx = (i % this.width) + this.offsetX;
+        const wy = ((i / this.width) | 0) + this.offsetY;
+        this.previousVisible.add((wx << 16) | (wy & 0xFFFF));
       }
     }
     this.visible.fill(0);
@@ -413,8 +451,29 @@ export class GameMap {
     }
   }
 
+  // --- Floor items ---
+  getFloorItem(x, y) {
+    return this.floorItems.get(this._overlayKey(x, y)) || null;
+  }
+
+  setFloorItem(x, y, item) {
+    this.floorItems.set(this._overlayKey(x, y), item);
+  }
+
+  removeFloorItem(x, y) {
+    this.floorItems.delete(this._overlayKey(x, y));
+  }
+
+  loadFloorItems(items) {
+    this.floorItems = new Map();
+    if (!items) return;
+    for (const { x, y, item } of items) {
+      this.floorItems.set(this._overlayKey(x, y), item);
+    }
+  }
+
   /** Get bounds of the map in world coordinates */
   getLoadedBounds() {
-    return { minX: 0, minY: 0, maxX: this.width, maxY: this.height };
+    return { minX: this.offsetX, minY: this.offsetY, maxX: this.offsetX + this.width, maxY: this.offsetY + this.height };
   }
 }
