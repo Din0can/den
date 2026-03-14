@@ -14,6 +14,7 @@ import { splatter as bloodSplatter, dropBlood, packCoord } from './src/blood.js'
 import { loadItemRegistry, getAllItems, getItemDef, generateContainerLoot, generateFloorItem, createItemInstance, CONTAINER_TILES, CONTAINER_CHARS, EQUIP_SLOTS, setContainerConfig, getContainerConfig, setRarityWeights, getRarityWeights } from './src/items.js';
 import { EnemyManager } from './enemy-manager.js';
 import { getEnemyTypes, updateEnemyType, loadEnemyTypes } from './src/enemy-types.js';
+import * as saveManager from './save-manager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -272,6 +273,69 @@ const players = new Map();
 
 function createEmptyEquipment() {
   return { head: null, chest: null, legs: null, mainHand: null, offHand: null };
+}
+
+function generateGuestName() {
+  const adjectives = ['Swift', 'Dark', 'Pale', 'Lost', 'Wild', 'Grim', 'Cold', 'Deep'];
+  const nouns = ['Rogue', 'Ghost', 'Shade', 'Wolf', 'Crow', 'Viper', 'Wraith', 'Fox'];
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  return `${adj}${noun}`;
+}
+
+function extractSaveState(player, layerId) {
+  return {
+    layerId,
+    x: player.x,
+    y: player.y,
+    facing: player.facing,
+    stats: player.stats,
+    inventory: player.inventory,
+    equipment: player.equipment,
+    totalArmor: player.totalArmor,
+    activeDamage: player.activeDamage,
+    attackRange: player.attackRange,
+    attackSpeed: player.attackSpeed,
+    lightRadius: player.lightRadius,
+  };
+}
+
+function handlePlayerDeath(playerId) {
+  const p = players.get(playerId);
+  if (!p) return;
+  const sock = io.sockets.sockets.get(playerId);
+  if (!sock) return;
+
+  if (p.username && saveManager.hasSavePoint(p.username)) {
+    // Registered player with a save — restore to last save point
+    const save = saveManager.getSave(p.username);
+    if (save && save.lastLayerId !== null) {
+      p.stats = save.stats || createPlayerStats();
+      p.inventory = save.inventory || Array(8).fill(null);
+      p.equipment = save.equipment || createEmptyEquipment();
+      p.totalArmor = save.totalArmor || 0;
+      p.activeDamage = save.activeDamage || 1;
+      p.attackRange = save.attackRange || 1;
+      p.attackSpeed = save.attackSpeed || 1000;
+      p.lightRadius = save.lightRadius || 0;
+      recomputeEquipment(p);
+      sock.emit('playerDied', { message: 'returning to last save...' });
+      executeTransition(playerId, save.lastLayerId);
+      return;
+    }
+  }
+
+  // Guest or no save point — reset to fresh at L0
+  p.stats = createPlayerStats();
+  p.inventory = Array(8).fill(null);
+  p.equipment = createEmptyEquipment();
+  p.totalArmor = 0;
+  p.activeDamage = 1;
+  p.attackRange = 1;
+  p.attackSpeed = 1000;
+  p.lightRadius = 0;
+  sock.emit('playerDied', { message: 'no save — restarting fresh' });
+  executeTransition(playerId, 0);
 }
 
 function addToInventory(player, item) {
@@ -635,39 +699,135 @@ function executeTransition(playerId, targetLayerId) {
     id: playerId, x: spawn.x, y: spawn.y, name: p?.name || '', color, facing: 'south',
   });
   adminiNs.to(`admin:layer:${oldLayerId}`).emit('adminPlayerLeft', { id: playerId });
+
+  // --- Save / register prompt on static layer entry (except L0) ---
+  if (newLayer.type === 'static' && targetLayerId !== 0 && p) {
+    if (p.username && !p.guest) {
+      // Registered player — auto-save
+      saveManager.updateSave(p.username, extractSaveState(p, targetLayerId));
+      console.log(`Auto-saved player ${p.username} on layer ${targetLayerId}`);
+    } else if (p.guest) {
+      // Guest — prompt to register
+      playerSocket.emit('promptRegister');
+    }
+  }
 }
 
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
   const id = socket.id;
-  let color = '#888888'; // Default until name is set
+  const auth = socket.handshake.auth || {};
+  let playerName = '';
+  let color = '#888888';
+  let username = null; // null = guest
+  let sessionToken = null;
+  let savedState = null; // loaded save data if returning player
 
-  // Assign to Layer 0
-  const layerId = 0;
+  // --- Authentication ---
+  if (auth.sessionToken) {
+    // Auto-login via session token
+    const result = saveManager.loginByToken(auth.sessionToken);
+    if (!result) {
+      socket.emit('authFailed', { error: 'Session expired. Please log in again.' });
+      socket.disconnect();
+      return;
+    }
+    username = result.username;
+    savedState = result.saveData;
+    sessionToken = auth.sessionToken;
+  } else if (auth.action === 'login' && auth.username && auth.password) {
+    const result = await saveManager.login(auth.username, auth.password);
+    if (!result.success) {
+      socket.emit('authFailed', { error: result.error });
+      socket.disconnect();
+      return;
+    }
+    username = result.username;
+    savedState = result.saveData;
+    sessionToken = result.token;
+  } else if (auth.action === 'register' && auth.username && auth.password) {
+    const result = await saveManager.register(auth.username, auth.password);
+    if (!result.success) {
+      socket.emit('authFailed', { error: result.error });
+      socket.disconnect();
+      return;
+    }
+    username = result.username;
+    sessionToken = result.token;
+  } else if (auth.guest) {
+    // Guest — no auth needed
+    username = null;
+  } else {
+    socket.emit('authFailed', { error: 'Invalid authentication' });
+    socket.disconnect();
+    return;
+  }
+
+  // Duplicate connection check for registered users
+  if (username) {
+    const existingSocketId = saveManager.getConnectedSocketId(username);
+    if (existingSocketId && existingSocketId !== id) {
+      const existingSock = io.sockets.sockets.get(existingSocketId);
+      if (existingSock) {
+        existingSock.emit('authFailed', { error: 'Logged in from another device' });
+        existingSock.disconnect();
+      }
+    }
+    saveManager.setConnected(username, id);
+    playerName = username;
+    color = nameToColor(username);
+  } else {
+    playerName = generateGuestName();
+    color = nameToColor(playerName);
+  }
+
+  // Determine spawn layer and state
+  let layerId = 0;
+  let restoredFromSave = false;
+
+  // If registered with a save point, restore to saved layer
+  if (savedState && savedState.lastLayerId !== null) {
+    const savedLayer = layerManager.getLayer(savedState.lastLayerId);
+    if (savedLayer && savedLayer.type === 'static') {
+      layerId = savedState.lastLayerId;
+      restoredFromSave = true;
+    }
+  }
+
   const layer = layerManager.assignPlayer(id, layerId);
   const roomName = `layer:${layerId}`;
   socket.join(roomName);
 
-  // Generate player wing for dynamic layers (materialize first if needed)
   if (layer.type === 'dynamic') {
     materializeLayer(layer);
     generatePlayerWing(layer, id);
   }
 
-  let spawn = layer.getSpawn();
-  spawn = offsetSpawn(layer, id, spawn);
-  players.set(id, {
-    id, color, x: spawn.x, y: spawn.y, name: '', facing: 'south',
-    stats: createPlayerStats(),
-    inventory: Array(8).fill(null),
-    equipment: createEmptyEquipment(),
-    totalArmor: 0,
-    activeDamage: 1,
+  let spawn;
+  if (restoredFromSave && savedState.x != null && savedState.y != null) {
+    spawn = { x: savedState.x, y: savedState.y };
+  } else {
+    spawn = layer.getSpawn();
+    spawn = offsetSpawn(layer, id, spawn);
+  }
+
+  const playerData = {
+    id, color, x: spawn.x, y: spawn.y, name: playerName,
+    facing: (restoredFromSave && savedState.facing) || 'south',
+    stats: restoredFromSave ? savedState.stats : createPlayerStats(),
+    inventory: restoredFromSave ? savedState.inventory : Array(8).fill(null),
+    equipment: restoredFromSave ? savedState.equipment : createEmptyEquipment(),
+    totalArmor: (restoredFromSave && savedState.totalArmor) || 0,
+    activeDamage: (restoredFromSave && savedState.activeDamage) || 1,
     equipEffects: [],
-    attackRange: 1,
-    attackSpeed: 1000,
+    attackRange: (restoredFromSave && savedState.attackRange) || 1,
+    attackSpeed: (restoredFromSave && savedState.attackSpeed) || 1000,
     lastAttackTime: 0,
-    lightRadius: 0,
-  });
+    lightRadius: (restoredFromSave && savedState.lightRadius) || 0,
+    username: username || null, // null for guests
+    guest: !username,
+  };
+  players.set(id, playerData);
+  if (restoredFromSave) recomputeEquipment(playerData);
 
   // Build same-layer player list
   const others = [];
@@ -677,13 +837,16 @@ io.on('connection', (socket) => {
     }
   }
 
-  // Send welcome with layer metadata + initial chunks
   const initialChunks = getInitialChunks(layer, id, spawn);
   const p = players.get(id);
   socket.emit('welcome', {
     id,
     color,
+    name: playerName,
     spawn,
+    facing: playerData.facing,
+    guest: !username,
+    sessionToken,
     layerMeta: layer.getMeta(),
     initialChunks,
     players: others,
@@ -695,8 +858,8 @@ io.on('connection', (socket) => {
     floorItems: serializeFloorItems(getLayerFloorItems(layerId)),
   });
 
-  socket.to(roomName).emit('playerJoined', { id, color, spawn, name: '', facing: 'south', lightRadius: 0 });
-  console.log(`Player ${id} joined layer ${layerId} at (${spawn.x}, ${spawn.y})`);
+  socket.to(roomName).emit('playerJoined', { id, color, spawn, name: playerName, facing: playerData.facing, lightRadius: p.lightRadius || 0 });
+  console.log(`Player ${id} (${username || 'guest:' + playerName}) joined layer ${layerId} at (${spawn.x}, ${spawn.y})`);
   broadcastLayerList();
 
   // --- Chunk requests ---
@@ -720,23 +883,15 @@ io.on('connection', (socket) => {
     if (data.y !== undefined) p.y = data.y;
     if (data.facing) p.facing = data.facing;
 
-    // Name-seeded color: compute on first name set
-    if (data.name && data.name !== p.name) {
-      p.name = data.name;
-      color = nameToColor(data.name);
-      p.color = color;
-      broadcastLayerList();
-    }
-
     data.id = id;
-    data.color = color;
+    data.color = p.color;
     data.lightRadius = p.lightRadius || 0;
     const playerLayerId = layerManager.getPlayerLayerId(id);
     socket.to(`layer:${playerLayerId}`).volatile.emit('playerState', data);
 
     // Forward to admins watching this layer
     adminiNs.to(`admin:layer:${playerLayerId}`).volatile.emit('adminPlayerState', {
-      id, x: p.x, y: p.y, name: p.name, color, facing: p.facing,
+      id, x: p.x, y: p.y, name: p.name, color: p.color, facing: p.facing,
     });
   });
 
@@ -1481,6 +1636,43 @@ io.on('connection', (socket) => {
   });
 
   // Debug: set sanity (temporary, for testing enemies)
+  // --- In-game registration (guest → registered) ---
+  socket.on('registerFromGame', async (data) => {
+    const p = players.get(id);
+    if (!p || !p.guest) return; // only guests can register in-game
+    const result = await saveManager.register(data.username, data.password);
+    if (!result.success) {
+      socket.emit('registerResult', { success: false, error: result.error });
+      return;
+    }
+    // Upgrade from guest to registered
+    p.guest = false;
+    p.username = result.username;
+    p.name = result.username;
+    p.color = nameToColor(result.username);
+    username = result.username;
+    saveManager.setConnected(result.username, id);
+
+    // Save current state immediately
+    const currentLayerId = layerManager.getPlayerLayerId(id);
+    const currentLayer = layerManager.getLayer(currentLayerId);
+    if (currentLayer && currentLayer.type === 'static' && currentLayerId !== 0) {
+      saveManager.updateSave(result.username, extractSaveState(p, currentLayerId));
+    }
+
+    socket.emit('registerResult', {
+      success: true,
+      username: result.username,
+      color: p.color,
+      sessionToken: result.token,
+    });
+
+    // Broadcast name/color update to other players
+    const pLayerId = layerManager.getPlayerLayerId(id);
+    socket.to(`layer:${pLayerId}`).emit('playerState', { id, color: p.color, name: p.name });
+    broadcastLayerList();
+  });
+
   socket.on('debugSanity', (data) => {
     const p = players.get(id);
     if (!p || typeof data.sanity !== 'number') return;
@@ -1490,8 +1682,15 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    const p = players.get(id);
     const playerLayerId = layerManager.getPlayerLayerId(id);
     const playerLayer = layerManager.getLayer(playerLayerId);
+
+    // Save on disconnect for registered players
+    if (p && p.username) {
+      saveManager.saveOnDisconnect(p.username, extractSaveState(p, playerLayerId));
+      saveManager.removeConnected(p.username);
+    }
 
     // Remove wing exit before removing player
     if (playerLayer && playerLayer.type === 'dynamic') {
@@ -2218,6 +2417,11 @@ setInterval(() => {
     const sock = io.sockets.sockets.get(id);
     if (sock) sock.emit('damage', { stats: p.stats });
     io.to(`layer:${playerLayerId}`).emit('bloodUpdate', { updates });
+
+    // Death check
+    if (killed) {
+      handlePlayerDeath(id);
+    }
   }
 }, 5000);
 
@@ -2229,6 +2433,7 @@ setInterval(() => {
     getLayerBlood,
     dropBlood,
     splatter: bloodSplatter,
+    handlePlayerDeath,
   });
 
   // Player auto-attack: each player attacks nearest enemy in range
@@ -2385,6 +2590,8 @@ setInterval(() => {
   }
 }, 30000);
 
-http.listen(PORT, () => {
-  console.log(`Den server running on http://localhost:${PORT}`);
+saveManager.init().then(() => {
+  http.listen(PORT, () => {
+    console.log(`Den server running on http://localhost:${PORT}`);
+  });
 });

@@ -49,9 +49,248 @@
       width: 100%;
       flex-shrink: 0;
     }
+
+    /* --- Menu overlay --- */
+    #menu-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: #0a0a0f;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      color: #aaa;
+    }
+    #menu-overlay.hidden { display: none; }
+
+    #menu-title {
+      font-family: 'Kraken-Primary', monospace;
+      font-size: 48px;
+      color: #c8b060;
+      margin-bottom: 8px;
+      letter-spacing: 4px;
+      text-shadow: 0 0 20px rgba(200, 176, 96, 0.3);
+    }
+    #menu-subtitle {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 32px;
+    }
+
+    #menu-box {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid #333;
+      padding: 24px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 300px;
+    }
+
+    #menu-box label {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: -8px;
+    }
+
+    #menu-box input[type="text"],
+    #menu-box input[type="password"] {
+      background: #111;
+      border: 1px solid #333;
+      color: #ccc;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      padding: 8px 10px;
+      outline: none;
+    }
+    #menu-box input:focus {
+      border-color: #666;
+    }
+
+    .menu-btn-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .menu-btn {
+      flex: 1;
+      background: #1a1a22;
+      border: 1px solid #444;
+      color: #ccc;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      padding: 10px 0;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .menu-btn:hover { background: #252530; border-color: #666; }
+    .menu-btn:active { background: #333; }
+
+    #menu-separator {
+      text-align: center;
+      color: #444;
+      font-size: 11px;
+      margin: 4px 0;
+    }
+
+    #btn-guest {
+      background: transparent;
+      border: 1px solid #333;
+      color: #666;
+      font-size: 12px;
+      padding: 8px 0;
+    }
+    #btn-guest:hover { color: #999; border-color: #555; }
+
+    #menu-error {
+      color: #cc4444;
+      font-size: 12px;
+      min-height: 16px;
+      text-align: center;
+      margin-top: 4px;
+    }
+
+    #menu-loading {
+      color: #555;
+      font-size: 12px;
+      text-align: center;
+      display: none;
+    }
+
+    /* --- Death overlay --- */
+    #death-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(10, 0, 0, 0.85);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Kraken-Primary', monospace;
+      pointer-events: none;
+    }
+    #death-overlay.show {
+      display: flex;
+      animation: deathFade 3s ease-out forwards;
+    }
+    #death-text {
+      font-size: 56px;
+      color: #aa2222;
+      text-shadow: 0 0 30px rgba(170, 34, 34, 0.5);
+    }
+    #death-sub {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: #664444;
+      margin-top: 12px;
+    }
+    @keyframes deathFade {
+      0% { opacity: 0; }
+      15% { opacity: 1; }
+      70% { opacity: 1; }
+      100% { opacity: 0; display: none; }
+    }
+
+    /* --- Register prompt overlay (for guests) --- */
+    #register-prompt {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: rgba(0, 0, 0, 0.8);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      color: #aaa;
+    }
+    #register-prompt.show { display: flex; }
+
+    #register-prompt-box {
+      background: #0a0a0f;
+      border: 1px solid #333;
+      padding: 24px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 300px;
+    }
+    #register-prompt-box h3 {
+      font-size: 14px;
+      color: #c8b060;
+      text-align: center;
+      font-weight: normal;
+    }
+    #register-prompt-box label {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: -8px;
+    }
+    #register-prompt-box input {
+      background: #111;
+      border: 1px solid #333;
+      color: #ccc;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      padding: 8px 10px;
+      outline: none;
+    }
+    #register-prompt-box input:focus { border-color: #666; }
+    #register-prompt-error {
+      color: #cc4444;
+      font-size: 12px;
+      min-height: 16px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
+  <!-- Menu overlay -->
+  <div id="menu-overlay">
+    <div id="menu-title">DUNGEON</div>
+    <div id="menu-subtitle">enter the depths</div>
+    <div id="menu-box">
+      <label>Username</label>
+      <input type="text" id="menu-username" maxlength="16" autocomplete="username" spellcheck="false">
+      <label>Password</label>
+      <input type="password" id="menu-password" autocomplete="current-password">
+      <div class="menu-btn-row">
+        <button class="menu-btn" id="btn-login">Login</button>
+        <button class="menu-btn" id="btn-register">Register</button>
+      </div>
+      <div id="menu-separator">── or ──</div>
+      <button class="menu-btn" id="btn-guest">Play as Guest</button>
+      <div id="menu-error"></div>
+      <div id="menu-loading">Connecting...</div>
+    </div>
+  </div>
+
+  <!-- Death overlay -->
+  <div id="death-overlay">
+    <div id="death-text">YOU DIED</div>
+    <div id="death-sub">returning to last save...</div>
+  </div>
+
+  <!-- In-game register prompt (for guests at save points) -->
+  <div id="register-prompt">
+    <div id="register-prompt-box">
+      <h3>Save your progress?</h3>
+      <label>Choose a Username</label>
+      <input type="text" id="reg-prompt-username" maxlength="16" spellcheck="false">
+      <label>Choose a Password</label>
+      <input type="password" id="reg-prompt-password">
+      <div class="menu-btn-row">
+        <button class="menu-btn" id="btn-reg-confirm">Register & Save</button>
+        <button class="menu-btn" id="btn-reg-dismiss" style="color:#666;border-color:#222">Not now</button>
+      </div>
+      <div id="register-prompt-error"></div>
+    </div>
+  </div>
+
   <canvas id="game-canvas"></canvas>
   <canvas id="crt-canvas"></canvas>
   <canvas id="hud-canvas"></canvas>

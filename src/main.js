@@ -17,6 +17,7 @@ import { Fog } from './fog.js';
 import { CONTAINER_TILES, CONTAINER_CHARS } from './items.js';
 import { initSpriteCache } from './sprites.js';
 import * as network from './network.js';
+import { initMenu, hideMenu, showMenu, showMenuError, setSessionToken, clearSessionToken, showRegisterPrompt, hideRegisterPrompt, showRegisterPromptError, showDeathOverlay } from './menu.js';
 
 // Facing direction -> interaction offset
 const FACING_OFFSET = {
@@ -44,6 +45,7 @@ const enemies = new Map(); // id -> { id, type, x, y, facing, hp, maxHp, char, c
 let lastMoveTime = 0;
 let playerName = '';
 let connected = false;
+let isGuest = false;
 let fovDirty = true;
 let currentLayerId = null;
 let onEntryTile = false;
@@ -178,26 +180,41 @@ function init() {
   initHotbarInput(hudCanvas);
   window.addEventListener('resize', debouncedResize);
 
-  playerName = generateName();
-  network.connect();
+  // Set up network event handlers before connecting
+  setupNetworkHandlers();
 
+  // Initialize menu — it will call network.connect() with auth data
+  initMenu((authData) => {
+    network.connect(authData);
+  });
+
+  initCRT(gameLoop);
+}
+
+function setupNetworkHandlers() {
   network.onWelcome((data) => {
     connected = true;
+    hideMenu();
+    playerName = data.name || '';
+    isGuest = !!data.guest;
+    if (data.sessionToken) setSessionToken(data.sessionToken);
+
     loadLayer(data.layerMeta, data.initialChunks);
     if (data.stats) localStats = data.stats;
     if (data.blood) gameMap.loadBlood(data.blood);
     if (data.floorItems) gameMap.loadFloorItems(data.floorItems);
     syncInventory(data);
 
-    localEntity = new Entity(data.id, data.spawn.x, data.spawn.y, '@', COLORS.PLAYER_LOCAL, playerName, 'south');
+    const color = data.color || COLORS.PLAYER_LOCAL;
+    localEntity = new Entity(data.id, data.spawn.x, data.spawn.y, '@', color, playerName, data.facing || 'south');
 
+    remotePlayers.clear();
     for (const p of data.players) {
       const ent = new Entity(p.id, p.x, p.y, '@', p.color || '#888888', p.name || '', p.facing || 'south');
       ent.lightRadius = p.lightRadius || 0;
       remotePlayers.set(p.id, ent);
     }
 
-    // Load enemy snapshot
     enemies.clear();
     if (data.enemies) {
       for (const e of data.enemies) {
@@ -205,13 +222,55 @@ function init() {
       }
     }
 
-    // Send name to server to trigger color computation
-    network.sendName(playerName);
-
     const bounds = gameMap.getLoadedBounds();
     camera.follow(localEntity, bounds);
     checkChunkBoundary();
     fovDirty = true;
+  });
+
+  network.onAuthFailed((data) => {
+    clearSessionToken();
+    showMenu();
+    showMenuError(data.error || 'Authentication failed');
+  });
+
+  network.onPromptRegister(() => {
+    showRegisterPrompt(
+      (username, password) => {
+        network.sendRegisterFromGame(username, password);
+      },
+      () => { /* dismissed — keep playing as guest */ }
+    );
+  });
+
+  network.onRegisterResult((data) => {
+    if (data.success) {
+      hideRegisterPrompt();
+      setSessionToken(data.sessionToken);
+      playerName = data.username;
+      isGuest = false;
+      if (localEntity) {
+        localEntity.name = playerName;
+        localEntity.color = data.color || localEntity.color;
+      }
+    } else {
+      showRegisterPromptError(data.error || 'Registration failed');
+    }
+  });
+
+  network.onPlayerDied((data) => {
+    const msg = isGuest ? 'no save — restarting fresh' : 'returning to last save...';
+    showDeathOverlay(msg);
+    // Server will send layerData to transition us — handled by onLayerData
+  });
+
+  network.onDisconnect((reason) => {
+    connected = false;
+    localEntity = null;
+    // If kicked by server (e.g. logged in elsewhere), show menu
+    if (reason === 'io server disconnect') {
+      showMenu();
+    }
   });
 
   network.onPlayerJoined((data) => {
@@ -557,8 +616,6 @@ function init() {
       network.sendDebugSanity(newSanity);
     }
   });
-
-  initCRT(gameLoop);
 }
 
 function buildHintLine2(item) {
@@ -779,14 +836,6 @@ function gameLoop(now) {
   // Render
   render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos, facingContainer, containerFloatMsg, facingShop, enemies, combatEffects, standingOnFloorItem);
   renderHud(hudInfo);
-}
-
-function generateName() {
-  const adjectives = ['Swift', 'Dark', 'Pale', 'Lost', 'Wild', 'Grim', 'Cold', 'Deep'];
-  const nouns = ['Rogue', 'Ghost', 'Shade', 'Wolf', 'Crow', 'Viper', 'Wraith', 'Fox'];
-  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const noun = nouns[Math.floor(Math.random() * nouns.length)];
-  return `${adj}${noun}`;
 }
 
 document.fonts.ready.then(init);

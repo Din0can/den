@@ -17,10 +17,22 @@ function throttledEmit(event, data) {
 
 const handlers = {};
 
-export function connect() {
-  socket = io({ transports: ['websocket'] });
+export function disconnect() {
+  if (socket) {
+    socket.disconnect();
+    socket = null;
+  }
+}
+
+export function connect(authData) {
+  if (socket) socket.disconnect();
+  socket = io({ transports: ['websocket'], reconnection: false, auth: authData || {} });
 
   socket.on('welcome', (data) => handlers.onWelcome?.(data));
+  socket.on('authFailed', (data) => handlers.onAuthFailed?.(data));
+  socket.on('promptRegister', (data) => handlers.onPromptRegister?.(data));
+  socket.on('playerDied', (data) => handlers.onPlayerDied?.(data));
+  socket.on('registerResult', (data) => handlers.onRegisterResult?.(data));
   socket.on('playerJoined', (data) => handlers.onPlayerJoined?.(data));
   socket.on('playerLeft', (data) => handlers.onPlayerLeft?.(data));
   socket.on('playerState', (data) => handlers.onPlayerState?.(data));
@@ -44,10 +56,17 @@ export function connect() {
   socket.on('floorItemRemoved', (data) => handlers.onFloorItemRemoved?.(data));
 
   socket.on('connect', () => console.log('Connected:', socket.id));
-  socket.on('disconnect', () => console.log('Disconnected'));
+  socket.on('disconnect', (reason) => {
+    console.log('Disconnected:', reason);
+    handlers.onDisconnect?.(reason);
+  });
 }
 
 export function onWelcome(fn) { handlers.onWelcome = fn; }
+export function onAuthFailed(fn) { handlers.onAuthFailed = fn; }
+export function onPromptRegister(fn) { handlers.onPromptRegister = fn; }
+export function onPlayerDied(fn) { handlers.onPlayerDied = fn; }
+export function onRegisterResult(fn) { handlers.onRegisterResult = fn; }
 export function onPlayerJoined(fn) { handlers.onPlayerJoined = fn; }
 export function onPlayerLeft(fn) { handlers.onPlayerLeft = fn; }
 export function onPlayerState(fn) { handlers.onPlayerState = fn; }
@@ -69,6 +88,7 @@ export function onRemoteAttack(fn) { handlers.onRemoteAttack = fn; }
 export function onRemoteCombatHit(fn) { handlers.onRemoteCombatHit = fn; }
 export function onFloorItemAdded(fn) { handlers.onFloorItemAdded = fn; }
 export function onFloorItemRemoved(fn) { handlers.onFloorItemRemoved = fn; }
+export function onDisconnect(fn) { handlers.onDisconnect = fn; }
 
 export function sendState(x, y, facing) {
   if (!socket) return;
@@ -163,6 +183,11 @@ export function sendDropItem(slot, isEquip) {
 export function sendDebugSanity(sanity) {
   if (!socket) return;
   socket.emit('debugSanity', { sanity });
+}
+
+export function sendRegisterFromGame(username, password) {
+  if (!socket) return;
+  socket.emit('registerFromGame', { username, password });
 }
 
 export function getId() {

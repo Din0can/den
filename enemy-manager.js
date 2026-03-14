@@ -570,6 +570,7 @@ export class EnemyManager {
               limbId: limb.id,
               limbName: limb.name,
               bleedAdded: result.bleedStacks > 0,
+              killed: result.killed,
               stats: targetPlayer.stats,
               bloodUpdate,
             });
@@ -833,6 +834,12 @@ export class EnemyManager {
                 damage: evt.damage,
               });
             }
+          }
+        }
+        // Check for player deaths from this enemy's attacks
+        for (const evt of enemy._combatEvents) {
+          if (evt.killed && helpers?.handlePlayerDeath) {
+            helpers.handlePlayerDeath(evt.targetId);
           }
         }
         enemy._combatEvents = [];

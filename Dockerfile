@@ -9,7 +9,7 @@ FROM node:22-alpine
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
-COPY server.js layer-manager.js enemy-manager.js ./
+COPY server.js layer-manager.js enemy-manager.js save-manager.js ./
 COPY src/ ./src/
 COPY --from=build /app/dist ./dist
 EXPOSE 3000
