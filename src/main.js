@@ -6,7 +6,7 @@ import { GameMap } from './game-map.js';
 import { Entity } from './entity.js';
 import { Camera } from './camera.js';
 import { initInput, initHotbarInput, getMovementDir, consumeInteract, consumeDrop, initShopInput, destroyShopInput } from './input.js';
-import { initHotbar, getState as getHotbarState, setAllSlots, setEquipment, setEquipAnim, getEquipAnim, enterShopMode, exitShopMode, updateShopData, getShopState } from './hotbar.js';
+import { initHotbar, getState as getHotbarState, setAllSlots, setEquipment, setEquipAnim, getEquipAnim, enterShopMode, exitShopMode, updateShopData, getShopState, selectSlot } from './hotbar.js';
 import { getSlotCenter, getEquipSlotCenter, renderShopOverlay, SHOP_CANVAS_H } from './hotbar-renderer.js';
 import { initRenderer, render } from './game-renderer.js';
 import { initHudRenderer, resizeHud, renderHud } from './hud-renderer.js';
@@ -235,11 +235,13 @@ function setupNetworkHandlers() {
   });
 
   network.onPromptRegister(() => {
+    const guestColor = localEntity?.color || null;
     showRegisterPrompt(
-      (username, password) => {
-        network.sendRegisterFromGame(username, password);
+      (username, password, color) => {
+        network.sendRegisterFromGame(username, password, color);
       },
-      () => { /* dismissed — keep playing as guest */ }
+      () => { /* dismissed */ },
+      guestColor
     );
   });
 
@@ -259,7 +261,7 @@ function setupNetworkHandlers() {
   });
 
   network.onPlayerDied((data) => {
-    const msg = isGuest ? 'no save — restarting fresh' : 'returning to last save...';
+    const msg = isGuest ? 'no save. restarting fresh.' : 'returning to last save...';
     showDeathOverlay(msg);
     // Server will send layerData to transition us — handled by onLayerData
   });
@@ -267,8 +269,10 @@ function setupNetworkHandlers() {
   network.onDisconnect((reason) => {
     connected = false;
     localEntity = null;
-    // If kicked by server (e.g. logged in elsewhere), show menu
-    if (reason === 'io server disconnect') {
+    // If kicked while playing (e.g. logged in elsewhere), show menu
+    // Don't show menu if we're already on it (auth failure case)
+    const menuVisible = !document.getElementById('menu-overlay').classList.contains('hidden');
+    if (reason === 'io server disconnect' && !menuVisible) {
       showMenu();
     }
   });
@@ -671,13 +675,13 @@ function gameLoop(now) {
     setEquipAnim(null);
   }
 
-  // Interact (E key) — priority: shop > unequip (explicit) > ENTRY > container > equip > use > door
+  // Interact (E key) — priority: shop mode > pickup > entry > world interactions > unequip > equip/use > door
   if (consumeInteract()) {
     const hotbar = getHotbarState();
-
-    // Shop mode interactions
     const shopState = getShopState();
+
     if (shopState.shopMode) {
+      // Shop mode interactions (top priority when shop is open)
       if (shopState.shopBrowsing === 'shop' && shopState.shopData) {
         const item = shopState.shopData.inventory[shopState.shopSelectedIndex];
         if (item && item.stock !== 0) {
@@ -690,12 +694,11 @@ function gameLoop(now) {
           network.sendSellEquipped(shopState.shopData.shopId, hotbar.selectedEquipSlot);
         }
       }
-    } else if (hotbar.selectedEquipSlot) {
-      // Equipment slot selected → unequip (explicit user intent via Shift+N)
-      network.sendUnequipItem(hotbar.selectedEquipSlot);
     } else if (gameMap.getFloorItem(localEntity.x, localEntity.y)) {
+      // Pick up floor item (world interaction - high priority)
       network.sendPickupItem();
     } else if (onEntryTile) {
+      // Enter/exit (world interaction)
       network.sendEnterExit();
     } else {
       const offset = FACING_OFFSET[localEntity.facing];
@@ -707,12 +710,15 @@ function gameLoop(now) {
         network.sendOpenShop(shopAtFacing.id);
       } else if (isContainerAt(tx, ty) && !openedContainers.has(`${tx},${ty}`)) {
         network.sendOpenContainer(tx, ty);
+      } else if (hotbar.selectedEquipSlot && hotbar.equipment[hotbar.selectedEquipSlot]) {
+        // Unequip (only after all world interactions checked)
+        network.sendUnequipItem(hotbar.selectedEquipSlot);
       } else if (hotbar.selectedIndex >= 0 && hotbar.slots[hotbar.selectedIndex] && hotbar.slots[hotbar.selectedIndex].slot) {
         network.sendEquipItem(hotbar.selectedIndex);
       } else if (hotbar.selectedIndex >= 0 && hotbar.slots[hotbar.selectedIndex] && hotbar.slots[hotbar.selectedIndex].type === 'consumable') {
         network.sendUseItem(hotbar.selectedIndex);
       } else {
-        // Door logic
+        // Door logic (lowest priority world interaction)
         const door = gameMap.getDoorAt(tx, ty);
         if (door) {
           network.sendDoorToggle(door.id);
@@ -736,6 +742,7 @@ function gameLoop(now) {
         containerMsgTime = performance.now();
       } else if (dropHotbar.selectedEquipSlot && dropHotbar.equipment[dropHotbar.selectedEquipSlot]) {
         network.sendDropItem(dropHotbar.selectedEquipSlot, true);
+        selectSlot(0); // reset selection to hotbar after dropping equipment
       } else if (dropHotbar.selectedIndex >= 0 && dropHotbar.slots[dropHotbar.selectedIndex]) {
         network.sendDropItem(dropHotbar.selectedIndex, false);
       }

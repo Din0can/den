@@ -1,22 +1,7 @@
 [
-  {
-    "maxDepth": 5,
-    "weights": [
-      50,
-      35,
-      10,
-      4,
-      1
-    ]
-  },
-  {
-    "maxDepth": null,
-    "weights": [
-      25,
-      25,
-      25,
-      15,
-      10
-    ]
-  }
+  { "maxDepth": 2, "weights": [65, 25, 8, 2, 0] },
+  { "maxDepth": 4, "weights": [50, 30, 14, 5, 1] },
+  { "maxDepth": 6, "weights": [35, 30, 20, 12, 3] },
+  { "maxDepth": 9, "weights": [25, 25, 25, 17, 8] },
+  { "maxDepth": null, "weights": [15, 20, 28, 22, 15] }
 ]

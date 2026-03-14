@@ -110,9 +110,9 @@ export function initHotbarInput(hudCanvas) {
     // Shop mode: clicking hotbar/equip → select for sell
     const state = getHotbarState();
     if (state.shopMode) {
-      // Check equip slot click first
+      // Check equip slot click first (only if slot has an item)
       const equipSlot = hitTestEquipSlot(mx, my, w, h);
-      if (equipSlot) {
+      if (equipSlot && state.equipment[equipSlot]) {
         const now = Date.now();
         if (lastClickEquip === equipSlot && now - lastClickTime < 350) {
           // Double-click equip slot in shop → sell
@@ -153,9 +153,9 @@ export function initHotbarInput(hudCanvas) {
       return; // Skip drag and equip logic in shop mode
     }
 
-    // Check equipment slot click
+    // Check equipment slot click (only if slot has an item)
     const equipSlot = hitTestEquipSlot(mx, my, w, h);
-    if (equipSlot) {
+    if (equipSlot && getHotbarState().equipment[equipSlot]) {
       const now = Date.now();
       if (lastClickEquip === equipSlot && now - lastClickTime < 350) {
         // Double-click on equipment slot → unequip

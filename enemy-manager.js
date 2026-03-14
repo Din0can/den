@@ -1,6 +1,6 @@
 // Server-side enemy lifecycle — spawn, AI state machine, movement, despawn
 
-import { ENEMY_TYPES, getSanityBracket, MAX_ENEMIES_PER_LAYER } from './src/enemy-types.js';
+import { ENEMY_TYPES, getSanityBracket, getTypesForDepth, MAX_ENEMIES_PER_LAYER } from './src/enemy-types.js';
 import { findPath, hasLineOfSight, getRandomWalkable } from './src/pathfinding.js';
 import { TILE_META } from './src/config.js';
 
@@ -16,6 +16,14 @@ const CHASE_SPEED_MULT = 1.5;    // speed multiplier during chase
 const SPAWN_MIN_DIST = 12;       // minimum distance from player to spawn
 const WANDER_RADIUS = 8;         // tile radius for wander target selection
 const SEARCH_RADIUS = 5;         // tile radius for search wandering
+const FLEE_DURATION = 5000;      // ms to flee before despawning (cowardly)
+const RETREAT_DURATION = 2000;   // ms to pause after retreating (hitAndRun)
+const RETREAT_DIST = 5;          // tiles to retreat before pausing
+const STALK_DIST = 8;            // min distance stalkers keep from target
+const AMBUSH_ALONE_RANGE = 8;    // no allies within this range = "alone"
+const HORROR_SANITY_RANGE = 5;   // tiles within which horror drains sanity
+const HORROR_SANITY_DRAIN = 2;   // sanity per tick when near horror
+const COWARDLY_FLEE_THRESHOLD = 0.4; // HP ratio to trigger flee
 
 function isPassableTile(tileId) {
   const meta = TILE_META[tileId];
@@ -30,7 +38,7 @@ function getPassableFn(enemy, layer) {
     // Always use owner's composited view
     return (x, y) => layer.getCompositedTile(enemy.ownerId, x, y);
   }
-  if (enemy.state === 'chase' || enemy.state === 'search') {
+  if (enemy.state === 'chase' || enemy.state === 'search' || enemy.state === 'flee' || enemy.state === 'retreat' || enemy.state === 'stalk') {
     // During chase/search: use target player's composited view
     if (enemy.targetId) {
       return (x, y) => layer.getCompositedTile(enemy.targetId, x, y);
@@ -130,8 +138,9 @@ export class EnemyManager {
     const ownerSet = this.byOwner.get(playerId);
     const playerEnemyCount = ownerSet ? ownerSet.size : 0;
 
-    // Filter available types to player-based only
-    const playerTypes = bracket.types.filter(t => ENEMY_TYPES[t].ownership === 'player');
+    // Filter available types by depth and ownership
+    const depthTypes = getTypesForDepth(bracket.types, layerId);
+    const playerTypes = depthTypes.filter(t => ENEMY_TYPES[t].ownership === 'player');
 
     if (playerEnemyCount < bracket.maxEnemies && playerTypes.length > 0) {
       const type = playerTypes[Math.floor(Math.random() * playerTypes.length)];
@@ -161,7 +170,8 @@ export class EnemyManager {
 
     this.layerSpawnCheck.set(layerId, now);
     const layerBracket = getSanityBracket(lowestSanity);
-    const layerTypes = layerBracket.types.filter(t => ENEMY_TYPES[t].ownership === 'layer');
+    const layerDepthTypes = getTypesForDepth(layerBracket.types, layerId);
+    const layerTypes = layerDepthTypes.filter(t => ENEMY_TYPES[t].ownership === 'layer');
 
     // Count layer-based enemies on this layer
     const layerSet = this.byLayer.get(layerId);
@@ -227,6 +237,7 @@ export class EnemyManager {
       attackRange: typeDef.attackRange || 1,
       attackSpeed: typeDef.attackSpeed || 1000,
       incorporeal: typeDef.incorporeal || false,
+      behavior: typeDef.behavior || 'default',
       lastAttackTime: 0,
       bleedStacks: 0,
       _combatEvents: [],
@@ -342,6 +353,15 @@ export class EnemyManager {
         break;
       case 'return':
         this._tickReturn(enemy, getTile, visiblePlayer, now, players, layerPlayerIds);
+        break;
+      case 'flee':
+        this._tickFlee(enemy, getTile, now, players, layerPlayerIds);
+        break;
+      case 'retreat':
+        this._tickRetreat(enemy, getTile, visiblePlayer, now, players, layerPlayerIds);
+        break;
+      case 'stalk':
+        this._tickStalk(enemy, layer, players, visiblePlayer, now, layerPlayerIds);
         break;
     }
   }
@@ -488,16 +508,28 @@ export class EnemyManager {
   }
 
   _enterAlert(enemy, visiblePlayer, now) {
+    // Ambush enemies stalk instead of alerting
+    if (enemy.behavior === 'ambush') {
+      enemy.state = 'stalk';
+      enemy.stateTime = now;
+      enemy.targetId = visiblePlayer.id;
+      enemy.lastKnownX = visiblePlayer.x;
+      enemy.lastKnownY = visiblePlayer.y;
+      enemy.path = null;
+      enemy._stateChanged = true;
+      return;
+    }
+
     enemy.state = 'alert';
     enemy.stateTime = now;
     enemy.targetId = visiblePlayer.id;
     enemy.lastKnownX = visiblePlayer.x;
     enemy.lastKnownY = visiblePlayer.y;
     enemy.facing = facingToward(enemy.x, enemy.y, visiblePlayer.x, visiblePlayer.y);
-    enemy.visited.clear(); // Reset exploration memory
+    enemy.visited.clear();
     enemy.path = null;
     enemy._stateChanged = true;
-    enemy._moved = true; // facing changed
+    enemy._moved = true;
   }
 
   _tickAlert(enemy, visiblePlayer, now) {
@@ -532,10 +564,12 @@ export class EnemyManager {
       }
     } else {
       // Lost LOS
-      if (enemy.lostTimer === 0) {
+      if (enemy.behavior === 'relentless') {
+        // Relentless enemies never give up - keep chasing last known position
+        enemy.lostTimer = 0;
+      } else if (enemy.lostTimer === 0) {
         enemy.lostTimer = now;
-      } else if (now - enemy.lostTimer >= CHASE_LOST_TIMEOUT) {
-        // Give up — transition to search
+      } else if (now - enemy.lostTimer >= (enemy.behavior === 'patrol' ? 1500 : CHASE_LOST_TIMEOUT)) {
         enemy.state = 'search';
         enemy.stateTime = now;
         enemy.path = null;
@@ -581,6 +615,22 @@ export class EnemyManager {
                 enemy.hp -= eff.thorns;
                 enemy._moved = true;
               }
+            }
+
+            // Behavior: hitAndRun - retreat after attacking
+            if (enemy.behavior === 'hitAndRun') {
+              enemy.state = 'retreat';
+              enemy.stateTime = now;
+              enemy.path = null;
+              enemy._stateChanged = true;
+            }
+
+            // Behavior: cowardly - flee if HP low (from thorns or just check)
+            if (enemy.behavior === 'cowardly' && enemy.hp <= enemy.maxHp * COWARDLY_FLEE_THRESHOLD) {
+              enemy.state = 'flee';
+              enemy.stateTime = now;
+              enemy.path = null;
+              enemy._stateChanged = true;
             }
 
             return; // Attack replaces movement for this tick
@@ -697,6 +747,159 @@ export class EnemyManager {
     const next = enemy.path[enemy.pathIndex];
     if (next) {
       if (this._tryMove(enemy, next.x, next.y, players, layerPlayerIds)) {
+        enemy.pathIndex++;
+        enemy.lastMoveTime = now;
+      }
+    }
+  }
+
+  // --- Behavioral state handlers ---
+
+  _tickFlee(enemy, getTile, now, players, layerPlayerIds) {
+    // Cowardly enemies run away then despawn
+    if (now - enemy.stateTime >= FLEE_DURATION) {
+      this.killEnemy(enemy.id);
+      return;
+    }
+
+    if (now - enemy.lastMoveTime < enemy.moveSpeed) return;
+
+    // Run away from target
+    if (!enemy.path || enemy.pathIndex >= enemy.path.length) {
+      const target = getRandomWalkable(getTile, enemy.x, enemy.y, WANDER_RADIUS, new Set());
+      if (target) {
+        enemy.path = findPath(getTile, enemy.x, enemy.y, target.x, target.y, 300);
+        enemy.pathIndex = 1;
+      }
+      if (!enemy.path) return;
+    }
+
+    const next = enemy.path[enemy.pathIndex];
+    if (next) {
+      if (this._tryMove(enemy, next.x, next.y, players, layerPlayerIds)) {
+        enemy.pathIndex++;
+        enemy.lastMoveTime = now;
+      }
+    }
+  }
+
+  _tickRetreat(enemy, getTile, visiblePlayer, now, players, layerPlayerIds) {
+    // Hit-and-run: move away from target, then pause, then re-engage
+    if (now - enemy.stateTime >= RETREAT_DURATION) {
+      // Re-engage: go back to chase if player visible, else search
+      if (visiblePlayer) {
+        enemy.state = 'chase';
+        enemy.stateTime = now;
+        enemy.lostTimer = 0;
+        enemy.movesSinceRepath = 999;
+        enemy.lastKnownX = visiblePlayer.x;
+        enemy.lastKnownY = visiblePlayer.y;
+      } else {
+        enemy.state = 'search';
+        enemy.stateTime = now;
+      }
+      enemy.path = null;
+      enemy._stateChanged = true;
+      return;
+    }
+
+    // Move away from last known player position
+    if (now - enemy.lastMoveTime < enemy.moveSpeed) return;
+
+    if (!enemy.path || enemy.pathIndex >= enemy.path.length) {
+      // Pick a point away from player
+      const dx = enemy.x - enemy.lastKnownX;
+      const dy = enemy.y - enemy.lastKnownY;
+      const len = Math.max(1, Math.abs(dx) + Math.abs(dy));
+      const tx = enemy.x + Math.round((dx / len) * RETREAT_DIST);
+      const ty = enemy.y + Math.round((dy / len) * RETREAT_DIST);
+      enemy.path = findPath(getTile, enemy.x, enemy.y, tx, ty, 300);
+      enemy.pathIndex = 1;
+      if (!enemy.path) return;
+    }
+
+    const next = enemy.path[enemy.pathIndex];
+    if (next) {
+      if (this._tryMove(enemy, next.x, next.y, players, layerPlayerIds)) {
+        enemy.pathIndex++;
+        enemy.lastMoveTime = now;
+      }
+    }
+  }
+
+  _tickStalk(enemy, layer, players, visiblePlayer, now, layerPlayerIds) {
+    // Ambush enemies follow at distance, attack when target is alone or low sanity
+    if (!visiblePlayer) {
+      // Lost sight - go to search
+      enemy.state = 'search';
+      enemy.stateTime = now;
+      enemy.path = null;
+      enemy._stateChanged = true;
+      return;
+    }
+
+    enemy.lastKnownX = visiblePlayer.x;
+    enemy.lastKnownY = visiblePlayer.y;
+    enemy.targetId = visiblePlayer.id;
+
+    const d = dist(enemy.x, enemy.y, visiblePlayer.x, visiblePlayer.y);
+    const targetPlayer = players.get(visiblePlayer.id);
+
+    // Check if target is "alone" (no other players nearby)
+    let targetAlone = true;
+    if (targetPlayer) {
+      for (const pid of layer.players) {
+        if (pid === visiblePlayer.id) continue;
+        const p = players.get(pid);
+        if (p && dist(visiblePlayer.x, visiblePlayer.y, p.x, p.y) <= AMBUSH_ALONE_RANGE) {
+          targetAlone = false;
+          break;
+        }
+      }
+    }
+
+    const lowSanity = targetPlayer && (targetPlayer.stats?.sanity ?? 100) < 40;
+
+    // Attack condition: target alone OR low sanity
+    if (targetAlone || lowSanity) {
+      enemy.state = 'alert';
+      enemy.stateTime = now;
+      enemy.facing = facingToward(enemy.x, enemy.y, visiblePlayer.x, visiblePlayer.y);
+      enemy.path = null;
+      enemy._stateChanged = true;
+      enemy._moved = true;
+      return;
+    }
+
+    // Otherwise keep distance - follow at STALK_DIST
+    if (now - enemy.lastMoveTime < enemy.moveSpeed) return;
+
+    if (d < STALK_DIST) {
+      // Too close - move away slightly
+      if (!enemy.path || enemy.pathIndex >= enemy.path.length) {
+        const getTile = getPassableFn(enemy, layer);
+        const dx = enemy.x - visiblePlayer.x;
+        const dy = enemy.y - visiblePlayer.y;
+        const len = Math.max(1, Math.abs(dx) + Math.abs(dy));
+        const tx = enemy.x + Math.round((dx / len) * 3);
+        const ty = enemy.y + Math.round((dy / len) * 3);
+        enemy.path = findPath(getTile, enemy.x, enemy.y, tx, ty, 200);
+        enemy.pathIndex = 1;
+      }
+    } else if (d > STALK_DIST + 3) {
+      // Too far - close in
+      if (!enemy.path || enemy.pathIndex >= enemy.path.length) {
+        const getTile = getPassableFn(enemy, layer);
+        enemy.path = findPath(getTile, enemy.x, enemy.y, visiblePlayer.x, visiblePlayer.y, 500);
+        enemy.pathIndex = 1;
+      }
+    } else {
+      return; // Good distance, hold position
+    }
+
+    if (enemy.path && enemy.pathIndex < enemy.path.length) {
+      const next = enemy.path[enemy.pathIndex];
+      if (next && this._tryMove(enemy, next.x, next.y, players, layerPlayerIds)) {
         enemy.pathIndex++;
         enemy.lastMoveTime = now;
       }

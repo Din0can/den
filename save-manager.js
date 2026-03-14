@@ -3,13 +3,16 @@ import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-const SAVES_DIR = join(import.meta.dirname, 'data', 'saves');
+const DATA_DIR = join(import.meta.dirname, 'data');
+const SAVES_DIR = join(DATA_DIR, 'saves');
 const SESSIONS_FILE = join(SAVES_DIR, '_sessions.json');
+const ADMINS_FILE = join(DATA_DIR, 'admins.json');
 
 // In-memory stores
 const saves = new Map();       // usernameLower -> saveData
 const sessions = new Map();    // sessionToken -> usernameLower
 const connectedUsers = new Map(); // usernameLower -> socketId (for duplicate detection)
+let adminList = [];            // lowercase usernames
 
 // Debounced writes
 const pendingWrites = new Map(); // usernameLower -> timeout
@@ -67,6 +70,20 @@ export async function init() {
     console.error('Failed to load sessions:', e.message);
   }
   console.log(`Loaded ${sessions.size} sessions`);
+
+  // Load admin list
+  try {
+    if (existsSync(ADMINS_FILE)) {
+      adminList = JSON.parse(await readFile(ADMINS_FILE, 'utf8'));
+    } else {
+      adminList = ['dino'];
+      await writeFile(ADMINS_FILE, JSON.stringify(adminList, null, 2));
+    }
+  } catch (e) {
+    console.error('Failed to load admins:', e.message);
+    adminList = ['dino'];
+  }
+  console.log(`Admins: ${adminList.join(', ')}`);
 }
 
 async function writeSave(usernameLower) {
@@ -101,11 +118,12 @@ export function isNameTaken(username) {
   return saves.has(username.toLowerCase());
 }
 
-export async function register(username, password) {
+export async function register(username, password, color) {
   const nameErr = validateUsername(username);
   if (nameErr) return { success: false, error: nameErr };
   const passErr = validatePassword(password);
   if (passErr) return { success: false, error: passErr };
+  if (!color) return { success: false, error: 'Choose a color' };
 
   const lower = username.toLowerCase();
   if (saves.has(lower)) return { success: false, error: 'Username already taken' };
@@ -117,6 +135,7 @@ export async function register(username, password) {
     username,
     passwordHash,
     salt,
+    color,
     createdAt: new Date().toISOString(),
     lastSaveAt: null,
     lastLayerId: null,
@@ -140,7 +159,7 @@ export async function register(username, password) {
   sessions.set(token, lower);
   writeSessions();
 
-  return { success: true, token, username };
+  return { success: true, token, username, color };
 }
 
 export async function login(username, password) {
@@ -148,10 +167,10 @@ export async function login(username, password) {
 
   const lower = username.toLowerCase();
   const save = saves.get(lower);
-  if (!save) return { success: false, error: 'Invalid username or password' };
+  if (!save) return { success: false, error: 'Account not found. Try registering.' };
 
   const hash = await hashPassword(password, save.salt);
-  if (hash !== save.passwordHash) return { success: false, error: 'Invalid username or password' };
+  if (hash !== save.passwordHash) return { success: false, error: 'Wrong password' };
 
   const token = randomUUID();
   sessions.set(token, lower);
@@ -252,4 +271,39 @@ export async function saveOnDisconnect(username, playerState) {
   clearTimeout(pendingWrites.get(lower));
   pendingWrites.delete(lower);
   await writeSave(lower);
+}
+
+// --- Admin management ---
+
+async function saveAdmins() {
+  try {
+    await writeFile(ADMINS_FILE, JSON.stringify(adminList, null, 2));
+  } catch (e) {
+    console.error('Failed to save admins:', e.message);
+  }
+}
+
+export function isAdmin(username) {
+  return adminList.includes(username.toLowerCase());
+}
+
+export function getAdmins() {
+  return [...adminList];
+}
+
+export async function addAdmin(username) {
+  const lower = username.toLowerCase();
+  if (adminList.includes(lower)) return false;
+  adminList.push(lower);
+  await saveAdmins();
+  return true;
+}
+
+export async function removeAdmin(username) {
+  const lower = username.toLowerCase();
+  const idx = adminList.indexOf(lower);
+  if (idx === -1) return false;
+  adminList.splice(idx, 1);
+  await saveAdmins();
+  return true;
 }

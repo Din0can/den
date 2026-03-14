@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Den — Admini</title>
+  <title>KRAKEN2004 - Admini</title>
   <style>
     @font-face {
       font-family: 'Kraken-Primary';
@@ -972,10 +972,20 @@
     .shop-inv-top {
       display: flex; align-items: center; gap: 3px; margin-bottom: 3px;
     }
-    .shop-inv-top select {
-      flex: 1; padding: 2px 4px; background: #222; color: #ccc;
+    .shop-item-picker {
+      flex: 1; position: relative;
+    }
+    .shop-item-picker-label {
+      display: flex; align-items: center; gap: 4px;
+      padding: 2px 4px; background: #222; color: #ccc;
       border: 1px solid #444; border-radius: 2px;
-      font-family: inherit; font-size: 10px;
+      font-size: 10px; cursor: pointer; min-height: 18px;
+    }
+    .shop-item-picker-label:hover { border-color: #666; }
+    .shop-item-dropdown {
+      position: absolute; top: 100%; left: 0; right: 0;
+      background: #111; border: 1px solid #444; z-index: 10;
+      padding: 2px;
     }
     .shop-inv-top button {
       background: #2a1a1a; color: #a66; border: 1px solid #5a3a3a;
@@ -1177,8 +1187,8 @@
       <div id="editor-palette"></div>
       <div class="tools-label">Entries</div>
       <div id="editor-entries">
-        <span class="entry-label">E&#x2193;:</span> <span id="entry-down-pos">not set</span><br>
-        <span class="entry-label">E&#x2191;:</span> <span id="entry-up-pos">not set</span>
+        <span class="entry-label">E&#x2193;:</span> <span id="entry-down-pos">not set</span> <button class="edit-btn" id="btn-clear-entry-down" style="font-size:8px;padding:0 3px;">x</button><br>
+        <span class="entry-label">E&#x2191;:</span> <span id="entry-up-pos">not set</span> <button class="edit-btn" id="btn-clear-entry-up" style="font-size:8px;padding:0 3px;">x</button>
       </div>
       <div id="shop-editor-panel" style="display:none; padding:8px; background:#1a1a0a; border:1px solid #554400; border-radius:3px; margin-bottom:10px;">
         <div class="tools-label" style="color:#ccaa00">Shop Editor</div>

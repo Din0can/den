@@ -104,35 +104,45 @@ export function renderHud(info) {
   // Render equip animation
   renderEquipAnim(ctx, info.hotbar);
 
-  // Equip/Use hint between equipment row and hotbar
+  // Equip/Use hint above equipment slots
   if (info.equipHint && !(info.shopState && info.shopState.shopMode)) {
     const hint = typeof info.equipHint === 'string'
       ? { line1: info.equipHint, line2: '' }
       : info.equipHint;
     const SLOT_SIZE = 36;
-    const hotbarStartY = (h - SLOT_SIZE) / 2;
+    const EQUIP_SIZE = 24;
+    const hotbarStartY = h - SLOT_SIZE - 30;
+    const equipStartY = hotbarStartY - EQUIP_SIZE - 4;
     ctx.textBaseline = 'top';
     ctx.textAlign = 'center';
 
-    // Line 1
-    ctx.font = `10px ${FONT}`;
-    const tw1 = ctx.measureText(hint.line1).width;
-    let hintY = hotbarStartY - 8;
-    if (hint.line2) hintY -= 16;
-    ctx.fillStyle = 'rgba(0,0,0,0.8)';
-    ctx.fillRect(w / 2 - tw1 / 2 - 4, hintY - 2, tw1 + 8, 13);
-    ctx.fillStyle = '#cccccc';
-    ctx.fillText(hint.line1, w / 2, hintY);
-
-    // Line 2 (description + effects)
     if (hint.line2) {
-      ctx.font = `10px ${FONT}`;
+      // Two lines: description first (higher), then name+actions
+      const l2y = equipStartY - 15;
+      const l1y = l2y - 15;
+
+      ctx.font = `12px ${FONT}`;
+      const tw1 = ctx.measureText(hint.line1).width;
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillRect(w / 2 - tw1 / 2 - 5, l1y - 2, tw1 + 10, 15);
+      ctx.fillStyle = '#cccccc';
+      ctx.fillText(hint.line1, w / 2, l1y);
+
+      ctx.font = `11px ${FONT}`;
       const tw2 = ctx.measureText(hint.line2).width;
-      const line2Y = hintY + 16;
-      ctx.fillStyle = 'rgba(0,0,0,0.8)';
-      ctx.fillRect(w / 2 - tw2 / 2 - 4, line2Y - 2, tw2 + 8, 13);
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillRect(w / 2 - tw2 / 2 - 5, l2y - 2, tw2 + 10, 14);
       ctx.fillStyle = '#999999';
-      ctx.fillText(hint.line2, w / 2, line2Y);
+      ctx.fillText(hint.line2, w / 2, l2y);
+    } else {
+      // Single line
+      const l1y = equipStartY - 15;
+      ctx.font = `12px ${FONT}`;
+      const tw1 = ctx.measureText(hint.line1).width;
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillRect(w / 2 - tw1 / 2 - 5, l1y - 2, tw1 + 10, 15);
+      ctx.fillStyle = '#cccccc';
+      ctx.fillText(hint.line1, w / 2, l1y);
     }
 
     ctx.textAlign = 'left';
@@ -142,7 +152,7 @@ export function renderHud(info) {
   ctx.textBaseline = 'middle';
 
   const pad = 16;
-  const y = h / 2;
+  const y = h - 48;
 
   // Hotbar left edge for overlap guard
   const hotbarLeft = (w - HOTBAR_TOTAL_W) / 2;
@@ -171,7 +181,7 @@ export function renderHud(info) {
     // Figure at far right
     const figureW = 18;
     const figureX = w - figureW - 8;
-    const figureY = (h - 30) / 2;
+    const figureY = h - 63;
     drawStickFigure(figureX, figureY, info.limbs);
 
     // Stats on one horizontal line to the left of figure

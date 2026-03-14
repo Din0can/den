@@ -32,7 +32,10 @@ const motherData = {
 const adminPlayers = new Map();
 
 // Enemies on the currently viewed layer
-const adminEnemies = new Map(); // id -> { id, type, x, y, facing, hp, maxHp, char, color, name, state, stateTime }
+const adminEnemies = new Map();
+
+// Floor items on the currently viewed layer
+const adminFloorItems = new Map(); // "x,y" -> item // id -> { id, type, x, y, facing, hp, maxHp, char, color, name, state, stateTime }
 
 // Camera state (world coordinates of top-left visible tile)
 let cameraX = 0;
@@ -41,6 +44,75 @@ let zoom = 1.0;
 const ZOOM_MIN = 0.15;
 const ZOOM_MAX = 3.0;
 let layerBounds = null;
+
+// Dirty flag: only render when something changes
+let dirty = true;
+function markDirty() { dirty = true; }
+
+// Gradient color helper for DOM elements
+function applyColorToElement(el, color) {
+  if (color?.startsWith('gradient:')) {
+    const parts = color.slice(9).split(':');
+    el.style.background = `linear-gradient(to bottom, ${parts[0]}, ${parts[1]})`;
+    el.style.webkitBackgroundClip = 'text';
+    el.style.webkitTextFillColor = 'transparent';
+    el.style.backgroundClip = 'text';
+  } else {
+    el.style.color = color || '#888';
+  }
+}
+
+function firstGradientColor(color) {
+  if (color?.startsWith('gradient:')) return color.slice(9).split(':')[0];
+  return color || '#888';
+}
+
+// Mother view composite cache
+function rebuildMotherComposite() {
+  const composite = new Map();
+  if (!motherData.materialized) { motherData.composite = composite; return; }
+  // Bone sacred tiles
+  const BONE_SACRED = new Set([2, 3, 4, 5, 7]); // FLOOR, DOOR_CLOSED, DOOR_OPEN, GRASS, ENTRY
+  const boneMap = motherData.boneMap;
+  // Iterate all bone chunks
+  for (const [key, chunk] of boneMap.chunks) {
+    const [cx, cy] = key.split(',').map(Number);
+    for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const tile = chunk[ly * CHUNK_SIZE + lx];
+        if (tile === 0) continue; // VOID
+        const wx = cx * CHUNK_SIZE + lx;
+        const wy = cy * CHUNK_SIZE + ly;
+        const k = `${wx},${wy}`;
+        if (BONE_SACRED.has(tile)) {
+          composite.set(k, { tile, color: '#ffffff' });
+        } else {
+          composite.set(k, { tile, color: '#777777' });
+        }
+      }
+    }
+  }
+  // Wing tiles override non-sacred bones
+  for (const [, wing] of motherData.wings) {
+    for (const [key, chunk] of wing.gameMap.chunks) {
+      const [cx, cy] = key.split(',').map(Number);
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+          const tile = chunk[ly * CHUNK_SIZE + lx];
+          if (tile === 0) continue;
+          const wx = cx * CHUNK_SIZE + lx;
+          const wy = cy * CHUNK_SIZE + ly;
+          const k = `${wx},${wy}`;
+          const existing = composite.get(k);
+          if (existing && BONE_SACRED.has(existing.tile)) continue; // sacred bone wins
+          composite.set(k, { tile, color: wing.color });
+        }
+      }
+    }
+  }
+  motherData.composite = composite;
+  markDirty();
+}
 
 // Cached layer list from server
 let cachedLayers = [];
@@ -94,6 +166,7 @@ canvas.addEventListener('wheel', (e) => {
   // Keep world point under cursor stable
   cameraX += mx / (TILE_SIZE * oldZoom) - mx / (TILE_SIZE * zoom);
   cameraY += my / (TILE_SIZE * oldZoom) - my / (TILE_SIZE * zoom);
+  markDirty();
 }, { passive: false });
 
 // Mouse drag panning + edit mode painting
@@ -152,12 +225,14 @@ window.addEventListener('mousemove', (e) => {
   const pos = canvasPosToTile(e.clientX, e.clientY);
   mouseWorldX = pos.x;
   mouseWorldY = pos.y;
+  if (editMode) markDirty(); // cursor preview needs redraw
 
   if (dragging) {
     const dx = e.clientX - dragStartX;
     const dy = e.clientY - dragStartY;
     cameraX = camStartX - dx / (TILE_SIZE * zoom);
     cameraY = camStartY - dy / (TILE_SIZE * zoom);
+    markDirty();
     return;
   }
 
@@ -179,12 +254,18 @@ window.addEventListener('mouseup', (e) => {
 
 initAdminiRenderer(canvas);
 
-// Connect to /admini namespace
-const socket = io('/admini', { transports: ['websocket'] });
+// Connect to /admini namespace with session auth
+const sessionToken = (() => { try { return localStorage.getItem('den_session'); } catch { return null; } })();
+const socket = io('/admini', { transports: ['websocket'], reconnection: false, auth: { sessionToken } });
+
+socket.on('authFailed', (data) => {
+  document.body.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:JetBrains Mono,monospace;color:#aa3333;font-size:14px;">${data.error || 'Admin access required'}</div>`;
+});
 
 socket.on('connect', () => {
   socket.emit('getLayers');
   socket.emit('getItems');
+  socket.emit('getAdmins');
 });
 
 socket.on('layerList', (layers) => {
@@ -198,12 +279,14 @@ socket.on('layerUpdate', (layers) => {
 });
 
 // --- Static / default layer view ---
-socket.on('layerChunks', ({ layerId, meta, chunks, players: layerPlayers }) => {
+socket.on('layerChunks', ({ layerId, meta, chunks, players: layerPlayers, floorItems }) => {
   if (layerId !== activeLayerId) return;
   viewMode = 'static';
   gameMap.loadChunks(chunks);
   adminPlayers.clear();
   adminEnemies.clear();
+  adminFloorItems.clear();
+  if (floorItems) for (const fi of floorItems) adminFloorItems.set(`${fi.x},${fi.y}`, fi.item);
   if (layerPlayers) {
     for (const p of layerPlayers) {
       adminPlayers.set(p.id, p);
@@ -218,13 +301,16 @@ socket.on('layerChunks', ({ layerId, meta, chunks, players: layerPlayers }) => {
     currentEntryDown = meta.entryDown;
     updateEntryInfo();
   }
+  markDirty();
 });
 
 // --- Mother view ---
-socket.on('motherView', ({ layerId, meta, materialized, bones, wings, players: layerPlayers }) => {
+socket.on('motherView', ({ layerId, meta, materialized, bones, wings, players: layerPlayers, floorItems }) => {
   if (layerId !== activeLayerId) return;
   viewMode = 'mother';
   adminEnemies.clear();
+  adminFloorItems.clear();
+  if (floorItems) for (const fi of floorItems) adminFloorItems.set(`${fi.x},${fi.y}`, fi.item);
 
   motherData.materialized = materialized;
   motherData.boneMap = new GameMap();
@@ -246,12 +332,14 @@ socket.on('motherView', ({ layerId, meta, materialized, bones, wings, players: l
     }
   }
 
+  rebuildMotherComposite();
   centerCamera(meta.bounds);
   updateLayerInfo(meta);
+  markDirty();
 });
 
 // --- Player view ---
-socket.on('playerView', ({ layerId, meta, playerId, chunks, players: layerPlayers }) => {
+socket.on('playerView', ({ layerId, meta, playerId, chunks, players: layerPlayers, floorItems }) => {
   if (layerId !== activeLayerId) return;
   viewMode = 'player';
   activePlayerId = playerId;
@@ -260,6 +348,8 @@ socket.on('playerView', ({ layerId, meta, playerId, chunks, players: layerPlayer
   gameMap.loadChunks(chunks);
 
   adminPlayers.clear();
+  adminFloorItems.clear();
+  if (floorItems) for (const fi of floorItems) adminFloorItems.set(`${fi.x},${fi.y}`, fi.item);
   if (layerPlayers) {
     for (const p of layerPlayers) {
       adminPlayers.set(p.id, p);
@@ -268,6 +358,7 @@ socket.on('playerView', ({ layerId, meta, playerId, chunks, players: layerPlayer
 
   centerCamera(meta.bounds);
   updateLayerInfo(meta);
+  markDirty();
 });
 
 // --- Real-time admin events ---
@@ -289,6 +380,7 @@ socket.on('adminPlayerState', (data) => {
       adminPlayers.set(data.id, { ...data });
     }
   }
+  markDirty();
 });
 
 socket.on('adminPlayerJoined', (data) => {
@@ -297,11 +389,13 @@ socket.on('adminPlayerJoined', (data) => {
   } else {
     adminPlayers.set(data.id, data);
   }
+  markDirty();
 });
 
 socket.on('adminPlayerLeft', ({ id }) => {
   motherData.players.delete(id);
   adminPlayers.delete(id);
+  markDirty();
 });
 
 socket.on('motherWingAdded', ({ playerId, name, color, chunks }) => {
@@ -310,16 +404,19 @@ socket.on('motherWingAdded', ({ playerId, name, color, chunks }) => {
   gm.initBounds(layerBounds || { maxX: 200, maxY: 160 });
   gm.loadChunks(chunks);
   motherData.wings.set(playerId, { name, color, gameMap: gm });
+  rebuildMotherComposite();
 });
 
 socket.on('motherWingRemoved', ({ playerId }) => {
   motherData.wings.delete(playerId);
+  rebuildMotherComposite();
 });
 
 socket.on('layerMaterialized', ({ layerId, bones }) => {
   if (activeLayerId !== layerId || viewMode !== 'mother') return;
   motherData.materialized = true;
   motherData.boneMap.loadChunks(bones);
+  rebuildMotherComposite();
 });
 
 socket.on('layerDematerialized', ({ layerId }) => {
@@ -353,6 +450,7 @@ socket.on('tilesUpdated', ({ layerId, tiles }) => {
   for (const { x, y, tile } of tiles) {
     gameMap.setTile(x, y, tile);
   }
+  markDirty();
 });
 
 socket.on('entryUpdated', ({ layerId, entryUp, entryDown }) => {
@@ -422,6 +520,7 @@ socket.on('adminEnemySnapshot', ({ enemies }) => {
       adminEnemies.set(e.id, { ...e, stateTime: performance.now() });
     }
   }
+  markDirty();
 });
 
 socket.on('adminEnemyUpdate', (data) => {
@@ -447,6 +546,18 @@ socket.on('adminEnemyUpdate', (data) => {
       adminEnemies.delete(id);
     }
   }
+  markDirty();
+});
+
+// --- Floor item real-time updates ---
+socket.on('adminFloorItemAdded', ({ x, y, item }) => {
+  adminFloorItems.set(`${x},${y}`, item);
+  markDirty();
+});
+
+socket.on('adminFloorItemRemoved', ({ x, y }) => {
+  adminFloorItems.delete(`${x},${y}`);
+  markDirty();
 });
 
 function centerCamera(bounds) {
@@ -477,7 +588,7 @@ function renderSidebar() {
     const header = document.createElement('div');
     header.className = 'layer-header';
     const label = document.createElement('span');
-    label.textContent = `L${layer.id} — ${layer.type}`;
+    label.textContent = `L${layer.id} - ${layer.type}`;
     header.appendChild(label);
 
     const rightSide = document.createElement('span');
@@ -547,8 +658,6 @@ function renderSidebar() {
         if (activeLayerId === layer.id && viewMode === 'player' && activePlayerId === p.id) {
           pLi.classList.add('active');
         }
-        pLi.style.color = p.color || '#888';
-
         // Drag-to-teleport: make player draggable
         pLi.draggable = true;
         pLi.addEventListener('dragstart', (e) => {
@@ -558,11 +667,12 @@ function renderSidebar() {
 
         const dot = document.createElement('span');
         dot.className = 'player-dot';
-        dot.style.backgroundColor = p.color || '#888';
+        dot.style.backgroundColor = firstGradientColor(p.color);
         pLi.appendChild(dot);
 
         const nameSpan = document.createElement('span');
         nameSpan.textContent = p.name || p.id.slice(0, 8);
+        applyColorToElement(nameSpan, p.color);
         pLi.appendChild(nameSpan);
 
         // Give item button
@@ -572,34 +682,83 @@ function renderSidebar() {
         giveBtn.style.cssText = 'margin-left:auto;font-size:9px;padding:1px 4px;';
         giveBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          // Toggle give panel
           const existing = pLi.querySelector('.give-panel');
           if (existing) { existing.remove(); return; }
+
           const panel = document.createElement('div');
           panel.className = 'give-panel';
-          panel.style.cssText = 'width:100%;display:flex;gap:4px;align-items:center;margin-top:4px;';
+          panel.style.cssText = 'width:100%;display:flex;flex-direction:column;gap:4px;margin-top:4px;';
           panel.addEventListener('click', (ev) => ev.stopPropagation());
-          const sel = document.createElement('select');
-          sel.style.cssText = 'font-size:10px;background:#222;color:#ccc;border:1px solid #444;flex:1;min-width:0;';
-          for (const [id, item] of Object.entries(cachedItems)) {
-            const opt = document.createElement('option');
-            opt.value = id;
-            opt.textContent = item.name || id;
-            sel.appendChild(opt);
+
+          // Search input
+          const search = document.createElement('input');
+          search.placeholder = 'Search items...';
+          search.style.cssText = 'font-size:10px;background:#181818;color:#ccc;border:1px solid #333;padding:3px 6px;font-family:inherit;';
+
+          // Item list container
+          const listContainer = document.createElement('div');
+          listContainer.style.cssText = 'max-height:180px;overflow-y:auto;border:1px solid #333;background:#111;';
+
+          let selectedItemId = null;
+          const items = Object.entries(cachedItems).sort((a, b) => (a[1].name || a[0]).localeCompare(b[1].name || b[0]));
+
+          function renderItems(filter) {
+            listContainer.innerHTML = '';
+            const q = (filter || '').toLowerCase();
+            for (const [id, item] of items) {
+              const name = item.name || id;
+              if (q && !name.toLowerCase().includes(q) && !id.toLowerCase().includes(q)) continue;
+              const row = document.createElement('div');
+              row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 4px;cursor:pointer;font-size:10px;color:#ccc;';
+              if (id === selectedItemId) row.style.background = '#2a2a3a';
+              row.addEventListener('mouseenter', () => { if (id !== selectedItemId) row.style.background = '#1a1a2a'; });
+              row.addEventListener('mouseleave', () => { if (id !== selectedItemId) row.style.background = ''; });
+              row.addEventListener('click', () => {
+                selectedItemId = id;
+                renderItems(search.value);
+              });
+              // Sprite canvas
+              if (item.sprite) {
+                const c = document.createElement('canvas');
+                c.width = 16; c.height = 16;
+                c.style.cssText = 'width:16px;height:16px;image-rendering:pixelated;flex-shrink:0;';
+                renderSpriteToElement(c, item.sprite, item.rarity || 'common', 16);
+                row.appendChild(c);
+              } else {
+                const placeholder = document.createElement('span');
+                placeholder.style.cssText = 'width:16px;height:16px;display:inline-block;text-align:center;font-size:12px;color:#666;flex-shrink:0;';
+                placeholder.textContent = item.char || '?';
+                row.appendChild(placeholder);
+              }
+              const label = document.createElement('span');
+              label.textContent = name;
+              row.appendChild(label);
+              listContainer.appendChild(row);
+            }
           }
+          renderItems('');
+
+          search.addEventListener('input', () => renderItems(search.value));
+
+          // Bottom row: give button + message
+          const bottomRow = document.createElement('div');
+          bottomRow.style.cssText = 'display:flex;gap:4px;align-items:center;';
           const goBtn = document.createElement('button');
           goBtn.textContent = 'Give';
           goBtn.className = 'edit-btn';
-          goBtn.style.cssText = 'font-size:9px;padding:2px 6px;flex-shrink:0;';
+          goBtn.style.cssText = 'font-size:9px;padding:2px 6px;';
           const msg = document.createElement('span');
-          msg.style.cssText = 'font-size:9px;color:#888;flex-shrink:0;';
+          msg.style.cssText = 'font-size:9px;color:#888;';
           goBtn.addEventListener('click', () => {
-            if (!sel.value) return;
-            socket.emit('giveItem', { playerId: p.id, itemId: sel.value });
+            if (!selectedItemId) return;
+            socket.emit('giveItem', { playerId: p.id, itemId: selectedItemId });
           });
-          panel.appendChild(sel);
-          panel.appendChild(goBtn);
-          panel.appendChild(msg);
+          bottomRow.appendChild(goBtn);
+          bottomRow.appendChild(msg);
+
+          panel.appendChild(search);
+          panel.appendChild(listContainer);
+          panel.appendChild(bottomRow);
           pLi.appendChild(panel);
           pLi._giveMsg = msg;
         });
@@ -837,6 +996,15 @@ function updateEntryInfo() {
   upEl.textContent = currentEntryUp ? `${currentEntryUp.x},${currentEntryUp.y}` : 'not set';
 }
 
+document.getElementById('btn-clear-entry-down').addEventListener('click', () => {
+  if (!editingLayerId && editingLayerId !== 0) return;
+  socket.emit('removeEntry', { layerId: editingLayerId, direction: 'down' });
+});
+document.getElementById('btn-clear-entry-up').addEventListener('click', () => {
+  if (!editingLayerId && editingLayerId !== 0) return;
+  socket.emit('removeEntry', { layerId: editingLayerId, direction: 'up' });
+});
+
 // Tool buttons
 document.querySelectorAll('.tool-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -947,6 +1115,8 @@ function floodFill(startX, startY) {
     if (visited.has(key)) continue;
     if (Math.abs(x - startX) > MAX_RADIUS || Math.abs(y - startY) > MAX_RADIUS) continue;
     if (gameMap.getTile(x, y) !== targetTile) continue;
+    // Skip tiles with shops to prevent accidental shop destruction
+    if (gameMap.getShopAt && gameMap.getShopAt(x, y)) continue;
 
     visited.add(key);
     const fillTile = pickTile();
@@ -1026,25 +1196,99 @@ function renderShopInventoryEditor(inventory) {
     const top = document.createElement('div');
     top.className = 'shop-inv-top';
 
-    const select = document.createElement('select');
-    select.className = 'shop-item-select';
-    const defaultOpt = document.createElement('option');
-    defaultOpt.value = '';
-    defaultOpt.textContent = '\u2014 item \u2014';
-    select.appendChild(defaultOpt);
-    for (const [id, item] of Object.entries(cachedItems)) {
-      const opt = document.createElement('option');
-      opt.value = id;
-      opt.textContent = `${item.char} ${item.name}`;
-      if (id === entry.itemId) opt.selected = true;
-      select.appendChild(opt);
+    // Custom item picker with sprites
+    const picker = document.createElement('div');
+    picker.className = 'shop-item-picker';
+    picker.dataset.itemId = entry.itemId || '';
+
+    const pickerLabel = document.createElement('div');
+    pickerLabel.className = 'shop-item-picker-label';
+    function updatePickerLabel(itemId) {
+      pickerLabel.innerHTML = '';
+      picker.dataset.itemId = itemId || '';
+      if (itemId && cachedItems[itemId]) {
+        const item = cachedItems[itemId];
+        if (item.sprite) {
+          const c = document.createElement('canvas');
+          c.width = 16; c.height = 16;
+          c.style.cssText = 'width:16px;height:16px;image-rendering:pixelated;flex-shrink:0;';
+          renderSpriteToElement(c, item.sprite, item.rarity || 'common', 16);
+          pickerLabel.appendChild(c);
+        }
+        const nameEl = document.createElement('span');
+        nameEl.textContent = item.name;
+        pickerLabel.appendChild(nameEl);
+      } else {
+        pickerLabel.textContent = '-- select item --';
+      }
     }
+    updatePickerLabel(entry.itemId);
+
+    pickerLabel.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Toggle dropdown
+      const existing = picker.querySelector('.shop-item-dropdown');
+      if (existing) { existing.remove(); return; }
+
+      const dropdown = document.createElement('div');
+      dropdown.className = 'shop-item-dropdown';
+
+      const search = document.createElement('input');
+      search.placeholder = 'Search...';
+      search.style.cssText = 'font-size:10px;background:#181818;color:#ccc;border:1px solid #333;padding:2px 4px;width:100%;font-family:inherit;margin-bottom:2px;';
+      dropdown.appendChild(search);
+
+      const listDiv = document.createElement('div');
+      listDiv.style.cssText = 'max-height:140px;overflow-y:auto;';
+      dropdown.appendChild(listDiv);
+
+      const sorted = Object.entries(cachedItems).sort((a,b) => (a[1].name||a[0]).localeCompare(b[1].name||b[0]));
+
+      function renderDropdown(filter) {
+        listDiv.innerHTML = '';
+        const q = (filter || '').toLowerCase();
+        for (const [id, item] of sorted) {
+          if (q && !(item.name||id).toLowerCase().includes(q)) continue;
+          const opt = document.createElement('div');
+          opt.style.cssText = 'display:flex;align-items:center;gap:4px;padding:2px 4px;cursor:pointer;font-size:10px;color:#ccc;';
+          opt.addEventListener('mouseenter', () => opt.style.background = '#1a1a2a');
+          opt.addEventListener('mouseleave', () => opt.style.background = '');
+          opt.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            updatePickerLabel(id);
+            dropdown.remove();
+          });
+          if (item.sprite) {
+            const c = document.createElement('canvas');
+            c.width = 16; c.height = 16;
+            c.style.cssText = 'width:16px;height:16px;image-rendering:pixelated;flex-shrink:0;';
+            renderSpriteToElement(c, item.sprite, item.rarity || 'common', 16);
+            opt.appendChild(c);
+          }
+          const label = document.createElement('span');
+          label.textContent = item.name || id;
+          opt.appendChild(label);
+          listDiv.appendChild(opt);
+        }
+      }
+      renderDropdown('');
+      search.addEventListener('input', () => renderDropdown(search.value));
+
+      picker.appendChild(dropdown);
+      search.focus();
+
+      // Close on outside click
+      const closeHandler = () => { dropdown.remove(); window.removeEventListener('click', closeHandler); };
+      setTimeout(() => window.addEventListener('click', closeHandler), 0);
+    });
+
+    picker.appendChild(pickerLabel);
 
     const removeBtn = document.createElement('button');
     removeBtn.textContent = 'x';
     removeBtn.addEventListener('click', () => row.remove());
 
-    top.appendChild(select);
+    top.appendChild(picker);
     top.appendChild(removeBtn);
 
     // Bottom line: stock, max, refill with labels
@@ -1075,7 +1319,8 @@ function getShopInvFromUI() {
   const rows = document.querySelectorAll('.shop-inv-row');
   const inv = [];
   for (const row of rows) {
-    const itemId = row.querySelector('select').value;
+    const picker = row.querySelector('.shop-item-picker');
+    const itemId = picker ? picker.dataset.itemId : '';
     if (!itemId) continue;
     const inputs = row.querySelectorAll('input');
     inv.push({
@@ -1365,6 +1610,15 @@ function renderEnemyList() {
           </select>
         </div>
       </div>
+      <div class="form-row">
+        <div>
+          <label>Behavior</label>
+          <select data-field="behavior">
+            ${['default','cowardly','patrol','ambush','hitAndRun','relentless'].map(b => `<option value="${b}"${(t.behavior||'default')===b?' selected':''}>${b}</option>`).join('')}
+          </select>
+        </div>
+        <div><label>Min Layer</label><input type="number" data-field="minLayer" value="${t.minLayer || 0}" min="0"></div>
+      </div>
       <button class="btn-save-enemy">Save</button>
     `;
     card.querySelector('.btn-save-enemy').addEventListener('click', () => {
@@ -1389,14 +1643,12 @@ document.getElementById('btn-new-item').addEventListener('click', () => {
 });
 
 socket.on('giveItemResult', ({ success, message }) => {
-  // Find the give-panel msg element for the relevant player
-  const panels = document.querySelectorAll('.give-panel');
-  for (const panel of panels) {
-    const msg = panel.querySelector('span');
-    if (msg) {
-      msg.textContent = message;
-      msg.style.color = success ? '#4a4' : '#a44';
-      setTimeout(() => { msg.textContent = ''; }, 2000);
+  const allPLis = document.querySelectorAll('.player-list li');
+  for (const pLi of allPLis) {
+    if (pLi._giveMsg) {
+      pLi._giveMsg.textContent = message;
+      pLi._giveMsg.style.color = success ? '#4a4' : '#a44';
+      setTimeout(() => { if (pLi._giveMsg) pLi._giveMsg.textContent = ''; }, 2000);
       break;
     }
   }
@@ -1405,6 +1657,62 @@ socket.on('giveItemResult', ({ success, message }) => {
 socket.on('adminTeleportResult', ({ success, message }) => {
   console.log(`Teleport: ${message}`);
 });
+
+// --- Admin list management ---
+let cachedAdmins = [];
+socket.on('adminList', (admins) => {
+  cachedAdmins = admins;
+  renderAdminPanel();
+});
+
+function renderAdminPanel() {
+  let panel = document.getElementById('admin-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'admin-panel';
+    panel.style.cssText = 'border-top:1px solid #333;margin-top:8px;padding-top:8px;';
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:11px;color:#888;margin-bottom:6px;';
+    title.textContent = 'Admins';
+    panel.appendChild(title);
+    const list = document.createElement('div');
+    list.id = 'admin-list';
+    panel.appendChild(list);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:4px;margin-top:4px;';
+    const input = document.createElement('input');
+    input.id = 'admin-add-input';
+    input.placeholder = 'username';
+    input.style.cssText = 'font-size:10px;background:#222;color:#ccc;border:1px solid #444;flex:1;padding:2px 4px;font-family:inherit;';
+    const addBtn = document.createElement('button');
+    addBtn.textContent = 'Add';
+    addBtn.className = 'edit-btn';
+    addBtn.style.cssText = 'font-size:9px;padding:2px 6px;';
+    addBtn.addEventListener('click', () => {
+      const val = input.value.trim();
+      if (val) { socket.emit('addAdmin', { username: val }); input.value = ''; }
+    });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') addBtn.click(); });
+    row.appendChild(input);
+    row.appendChild(addBtn);
+    panel.appendChild(row);
+    layerListEl.parentElement.appendChild(panel);
+  }
+  const list = document.getElementById('admin-list');
+  list.innerHTML = '';
+  for (const admin of cachedAdmins) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#aaa;padding:1px 0;';
+    row.textContent = admin;
+    const rmBtn = document.createElement('button');
+    rmBtn.textContent = 'x';
+    rmBtn.className = 'edit-btn';
+    rmBtn.style.cssText = 'font-size:9px;padding:0 4px;color:#aa3333;';
+    rmBtn.addEventListener('click', () => socket.emit('removeAdmin', { username: admin }));
+    row.appendChild(rmBtn);
+    list.appendChild(row);
+  }
+}
 
 socket.on('itemList', ({ items }) => {
   cachedItems = items || {};
@@ -1760,7 +2068,7 @@ function gameLoop(now) {
   const dt = (now - lastTime) / 1000;
   lastTime = now;
 
-  // Camera panning (keyboard) — only when not typing in input
+  // Camera panning (keyboard)
   if (document.activeElement?.tagName !== 'INPUT') {
     let dx = 0, dy = 0;
     if (keys['ArrowLeft'] || keys['KeyA']) dx -= 1;
@@ -1768,7 +2076,6 @@ function gameLoop(now) {
     if (keys['ArrowUp'] || keys['KeyW']) dy -= 1;
     if (keys['ArrowDown'] || keys['KeyS']) dy += 1;
 
-    // In edit mode, only pan with arrow keys (WASD used for shortcuts)
     if (editMode) {
       dx = 0; dy = 0;
       if (keys['ArrowLeft']) dx -= 1;
@@ -1777,31 +2084,38 @@ function gameLoop(now) {
       if (keys['ArrowDown']) dy += 1;
     }
 
-    cameraX += dx * PAN_SPEED * dt / zoom;
-    cameraY += dy * PAN_SPEED * dt / zoom;
+    if (dx || dy) {
+      cameraX += dx * PAN_SPEED * dt / zoom;
+      cameraY += dy * PAN_SPEED * dt / zoom;
+      markDirty();
+    }
   }
 
   // Resize check
   if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
     resize();
+    markDirty();
   }
 
-  const camX = Math.floor(cameraX);
-  const camY = Math.floor(cameraY);
+  // Only render when dirty
+  if (dirty) {
+    dirty = false;
+    const camX = Math.floor(cameraX);
+    const camY = Math.floor(cameraY);
 
-  // Build edit state for renderer
-  const editState = editMode ? {
-    mouseWorldX, mouseWorldY, brushSize, currentTool,
-    entryUp: currentEntryUp, entryDown: currentEntryDown,
-    doorOrientation,
-    shops: gameMap._allShops,
-    selectedTile: selectedTiles.length === 1 ? selectedTiles[0] : null,
-  } : null;
+    const editState = editMode ? {
+      mouseWorldX, mouseWorldY, brushSize, currentTool,
+      entryUp: currentEntryUp, entryDown: currentEntryDown,
+      doorOrientation,
+      shops: gameMap._allShops,
+      selectedTile: selectedTiles.length === 1 ? selectedTiles[0] : null,
+    } : null;
 
-  if (viewMode === 'mother') {
-    adminiRenderMother(motherData, camX, camY, zoom, adminEnemies);
-  } else {
-    adminiRender(gameMap, camX, camY, viewMode === 'player' || viewMode === 'static' ? adminPlayers : null, zoom, editState, adminEnemies);
+    if (viewMode === 'mother') {
+      adminiRenderMother(motherData, camX, camY, zoom, adminEnemies, adminFloorItems);
+    } else {
+      adminiRender(gameMap, camX, camY, viewMode === 'player' || viewMode === 'static' ? adminPlayers : null, zoom, editState, adminEnemies, adminFloorItems);
+    }
   }
 
   requestAnimationFrame(gameLoop);

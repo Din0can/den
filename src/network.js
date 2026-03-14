@@ -185,9 +185,9 @@ export function sendDebugSanity(sanity) {
   socket.emit('debugSanity', { sanity });
 }
 
-export function sendRegisterFromGame(username, password) {
+export function sendRegisterFromGame(username, password, color) {
   if (!socket) return;
-  socket.emit('registerFromGame', { username, password });
+  socket.emit('registerFromGame', { username, password, color });
 }
 
 export function getId() {

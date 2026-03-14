@@ -23,7 +23,7 @@ export function renderHotbar(ctx, state, w, h, shopMode = false, hideSelection =
   if (!state) return;
 
   const startX = (w - TOTAL_W) / 2;
-  const startY = (h - SLOT_SIZE) / 2;
+  const startY = h - SLOT_SIZE - 30;
 
   for (let i = 0; i < SLOT_COUNT; i++) {
     const sx = startX + i * (SLOT_SIZE + SLOT_GAP);
@@ -97,7 +97,7 @@ export function renderEquipment(ctx, state, w, h, shopMode = false, hideSelectio
   // Also render if an equipment slot is selected (even if empty, for visual feedback)
   if (!hasAny && !state.selectedEquipSlot) return;
 
-  const hotbarStartY = (h - SLOT_SIZE) / 2;
+  const hotbarStartY = h - SLOT_SIZE - 30;
   const equipStartY = hotbarStartY - EQUIP_SIZE - 4;
   const equipStartX = (w - EQUIP_TOTAL_W) / 2;
 
@@ -294,7 +294,7 @@ export function hitTestShopSlot(mx, my, w, h, itemCount) {
 
 export function hitTestSlot(mx, my, w, h) {
   const startX = (w - TOTAL_W) / 2;
-  const startY = (h - SLOT_SIZE) / 2;
+  const startY = h - SLOT_SIZE - 30;
 
   for (let i = 0; i < SLOT_COUNT; i++) {
     const sx = startX + i * (SLOT_SIZE + SLOT_GAP);
@@ -306,7 +306,7 @@ export function hitTestSlot(mx, my, w, h) {
 }
 
 export function hitTestEquipSlot(mx, my, w, h) {
-  const hotbarStartY = (h - SLOT_SIZE) / 2;
+  const hotbarStartY = h - SLOT_SIZE - 30;
   const equipStartY = hotbarStartY - EQUIP_SIZE - 4;
   const equipStartX = (w - EQUIP_TOTAL_W) / 2;
 
@@ -325,7 +325,7 @@ export const HOTBAR_TOTAL_W = TOTAL_W;
 // Export equipment layout info for animation calculations
 export function getSlotCenter(slotIndex, w, h) {
   const startX = (w - TOTAL_W) / 2;
-  const startY = (h - SLOT_SIZE) / 2;
+  const startY = h - SLOT_SIZE - 30;
   return {
     x: startX + slotIndex * (SLOT_SIZE + SLOT_GAP) + SLOT_SIZE / 2,
     y: startY + SLOT_SIZE / 2,
@@ -335,7 +335,7 @@ export function getSlotCenter(slotIndex, w, h) {
 export function getEquipSlotCenter(slotName, w, h) {
   const idx = EQUIP_KEYS.indexOf(slotName);
   if (idx < 0) return null;
-  const hotbarStartY = (h - SLOT_SIZE) / 2;
+  const hotbarStartY = h - SLOT_SIZE - 30;
   const equipStartY = hotbarStartY - EQUIP_SIZE - 4;
   const equipStartX = (w - EQUIP_TOTAL_W) / 2;
   return {

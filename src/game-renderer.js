@@ -1,5 +1,6 @@
 import { TILE_SIZE, TILE, TILE_META, COLORS, TORCH_VISION_RADIUS } from './config.js';
 import { viewport } from './viewport.js';
+import { drawSprite } from './sprites.js';
 
 let ctx;
 const FONT_SIZE = TILE_SIZE;
@@ -68,10 +69,24 @@ const FACING_ROTATION = {
   east: -Math.PI / 2,
 };
 
+/** Resolve a color string to a canvas fillStyle (handles gradient: prefix) */
+function resolveColor(color, px, py, h) {
+  if (typeof color === 'string' && color.startsWith('gradient:')) {
+    const parts = color.slice(9).split(':');
+    if (parts.length >= 2) {
+      const grad = ctx.createLinearGradient(px, py, px, py + (h || TILE_SIZE));
+      grad.addColorStop(0, parts[0]);
+      grad.addColorStop(1, parts[1]);
+      return grad;
+    }
+  }
+  return color;
+}
+
 /** Draw a character rotated based on facing direction */
 function drawRotatedChar(char, px, py, color, facing) {
   const rotation = FACING_ROTATION[facing] || 0;
-  ctx.fillStyle = color;
+  ctx.fillStyle = resolveColor(color, px, py, TILE_SIZE);
   if (rotation === 0) {
     ctx.fillText(char, px + 2, py + 1);
   } else {
@@ -180,9 +195,13 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
         if (vis) {
           const floorItem = gameMap.getFloorItem(mx, my);
           if (floorItem) {
-            const rarityStr = typeof floorItem.rarity === 'object' ? floorItem.rarity?.name : floorItem.rarity;
-            ctx.fillStyle = RARITY_COLORS[rarityStr] || '#ccaa00';
-            ctx.fillText(floorItem.char || '?', px + 2, py + 1);
+            if (floorItem.sprite && drawSprite(ctx, floorItem.sprite, floorItem.rarity, px + TILE_SIZE / 2, py + TILE_SIZE / 2, TILE_SIZE)) {
+              // Rendered as sprite
+            } else {
+              const rarityStr = typeof floorItem.rarity === 'object' ? floorItem.rarity?.name : floorItem.rarity;
+              ctx.fillStyle = RARITY_COLORS[rarityStr] || '#ccaa00';
+              ctx.fillText(floorItem.char || '?', px + 2, py + 1);
+            }
           }
         }
       }
@@ -203,12 +222,9 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
     // Name label above entity
     if (ent.name) {
       ctx.font = NAME_FONT;
-      ctx.fillStyle = ent.color;
-      if (ent._nameWidth === undefined) {
-        ent._nameWidth = ctx.measureText(ent.name).width;
-      }
-      const tw = ent._nameWidth;
-      ctx.fillText(ent.name, sx + TILE_SIZE / 2 - tw / 2, sy - 12);
+      const nx = sx + TILE_SIZE / 2 - ((ent._nameWidth ??= ctx.measureText(ent.name).width)) / 2;
+      ctx.fillStyle = resolveColor(ent.color, nx, sy - 12, 10);
+      ctx.fillText(ent.name, nx, sy - 12);
       ctx.font = FONT;
     }
   }
@@ -484,11 +500,9 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
         // Name label
         if (ent.name) {
           ctx.font = NAME_FONT;
-          ctx.fillStyle = ent.color;
-          if (ent._nameWidth === undefined) {
-            ent._nameWidth = ctx.measureText(ent.name).width;
-          }
-          ctx.fillText(ent.name, esx + TILE_SIZE / 2 - ent._nameWidth / 2, esy - 12);
+          const enx = esx + TILE_SIZE / 2 - ((ent._nameWidth ??= ctx.measureText(ent.name).width)) / 2;
+          ctx.fillStyle = resolveColor(ent.color, enx, esy - 12, 10);
+          ctx.fillText(ent.name, enx, esy - 12);
           ctx.font = FONT;
         }
       }

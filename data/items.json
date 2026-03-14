@@ -742,7 +742,7 @@
   },
   "exit_interview": {
     "id": "exit_interview",
-    "name": "Exit Interview",
+    "name": "Murasame",
     "char": "X",
     "type": "weapon",
     "slot": "mainHand",
@@ -755,7 +755,7 @@
     "twoHanded": false,
     "minLayer": 3,
     "effect": null,
-    "description": "The last question anyone asks you.",
+    "description": "A cursed edge that never dulls. It drinks what it cuts.",
     "sprite": "sword_ornate",
     "value": 120
   },
@@ -779,7 +779,7 @@
   },
   "directors_decree": {
     "id": "directors_decree",
-    "name": "Director's Decree",
+    "name": "Jottunbane",
     "char": "!",
     "type": "weapon",
     "slot": "mainHand",
@@ -792,7 +792,7 @@
     "twoHanded": true,
     "minLayer": 4,
     "effect": null,
-    "description": "Final authority. No appeals.",
+    "description": "Forged to fell giants. The ground trembles with each swing.",
     "sprite": "hammer_ornate",
     "value": 250
   }

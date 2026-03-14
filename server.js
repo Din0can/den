@@ -334,7 +334,7 @@ function handlePlayerDeath(playerId) {
   p.attackRange = 1;
   p.attackSpeed = 1000;
   p.lightRadius = 0;
-  sock.emit('playerDied', { message: 'no save — restarting fresh' });
+  sock.emit('playerDied', { message: 'no save. restarting fresh.' });
   executeTransition(playerId, 0);
 }
 
@@ -723,12 +723,16 @@ io.on('connection', async (socket) => {
   let savedState = null; // loaded save data if returning player
 
   // --- Authentication ---
+  function authFail(error) {
+    socket.emit('authFailed', { error });
+    setTimeout(() => socket.disconnect(), 500);
+  }
+
   if (auth.sessionToken) {
     // Auto-login via session token
     const result = saveManager.loginByToken(auth.sessionToken);
     if (!result) {
-      socket.emit('authFailed', { error: 'Session expired. Please log in again.' });
-      socket.disconnect();
+      authFail('Session expired. Please log in again.');
       return;
     }
     username = result.username;
@@ -737,18 +741,16 @@ io.on('connection', async (socket) => {
   } else if (auth.action === 'login' && auth.username && auth.password) {
     const result = await saveManager.login(auth.username, auth.password);
     if (!result.success) {
-      socket.emit('authFailed', { error: result.error });
-      socket.disconnect();
+      authFail(result.error);
       return;
     }
     username = result.username;
     savedState = result.saveData;
     sessionToken = result.token;
   } else if (auth.action === 'register' && auth.username && auth.password) {
-    const result = await saveManager.register(auth.username, auth.password);
+    const result = await saveManager.register(auth.username, auth.password, auth.color);
     if (!result.success) {
-      socket.emit('authFailed', { error: result.error });
-      socket.disconnect();
+      authFail(result.error);
       return;
     }
     username = result.username;
@@ -774,10 +776,12 @@ io.on('connection', async (socket) => {
     }
     saveManager.setConnected(username, id);
     playerName = username;
-    color = nameToColor(username);
+    // Use saved color if available, otherwise fall back to name-derived
+    const save = saveManager.getSave(username);
+    color = (save && save.color) || nameToColor(username);
   } else {
     playerName = generateGuestName();
-    color = nameToColor(playerName);
+    color = auth.color || nameToColor(playerName);
   }
 
   // Determine spawn layer and state
@@ -1361,6 +1365,7 @@ io.on('connection', async (socket) => {
     socket.emit('containerResult', { message: `Picked up: ${item.name}` });
     socket.to(`layer:${currentLayerId}`).emit('floorItemRemoved', { x: p.x, y: p.y });
     socket.emit('floorItemRemoved', { x: p.x, y: p.y });
+    adminiNs.to(`admin:layer:${currentLayerId}`).emit('adminFloorItemRemoved', { x: p.x, y: p.y });
   });
 
   // --- Drop item ---
@@ -1401,6 +1406,7 @@ io.on('connection', async (socket) => {
     const broadcastData = { x: p.x, y: p.y, item };
     socket.emit('floorItemAdded', broadcastData);
     socket.to(`layer:${currentLayerId}`).emit('floorItemAdded', broadcastData);
+    adminiNs.to(`admin:layer:${currentLayerId}`).emit('adminFloorItemAdded', broadcastData);
   });
 
   // --- Shop handlers ---
@@ -1640,7 +1646,7 @@ io.on('connection', async (socket) => {
   socket.on('registerFromGame', async (data) => {
     const p = players.get(id);
     if (!p || !p.guest) return; // only guests can register in-game
-    const result = await saveManager.register(data.username, data.password);
+    const result = await saveManager.register(data.username, data.password, data.color);
     if (!result.success) {
       socket.emit('registerResult', { success: false, error: result.error });
       return;
@@ -1649,7 +1655,7 @@ io.on('connection', async (socket) => {
     p.guest = false;
     p.username = result.username;
     p.name = result.username;
-    p.color = nameToColor(result.username);
+    p.color = result.color || nameToColor(result.username);
     username = result.username;
     saveManager.setConnected(result.username, id);
 
@@ -1726,7 +1732,15 @@ io.on('connection', async (socket) => {
 // --- Admini namespace (admin layer viewer) ---
 const adminiNs = io.of('/admini');
 adminiNs.on('connection', (socket) => {
-  console.log(`Admini connected: ${socket.id}`);
+  // Auth check: require valid session token for an admin user
+  const token = socket.handshake.auth?.sessionToken;
+  const session = token ? saveManager.loginByToken(token) : null;
+  if (!session || !saveManager.isAdmin(session.username)) {
+    socket.emit('authFailed', { error: 'Admin access required' });
+    setTimeout(() => socket.disconnect(), 500);
+    return;
+  }
+  console.log(`Admini connected: ${socket.id} (${session.username})`);
   let currentAdminLayer = null;
 
   socket.on('getLayers', () => {
@@ -1771,6 +1785,7 @@ adminiNs.on('connection', (socket) => {
         bones: layer.materialized ? serializeChunkMap(layer.bones) : [],
         wings,
         players: layerPlayers,
+        floorItems: serializeFloorItems(getLayerFloorItems(layerId)),
       });
     } else if (layer.type === 'dynamic' && mode === 'player' && playerId) {
       // Player view: composited bones + their wing
@@ -1786,6 +1801,7 @@ adminiNs.on('connection', (socket) => {
         layerId, meta, playerId,
         chunks: layer.getChunksForPlayer(playerId, allKeys),
         players: layerPlayers,
+        floorItems: serializeFloorItems(getLayerFloorItems(layerId)),
       });
     } else {
       // Static layer or default: send chunks + player positions
@@ -1794,6 +1810,7 @@ adminiNs.on('connection', (socket) => {
         layerId, meta,
         chunks: serializeChunkMap(store),
         players: layerPlayers,
+        floorItems: serializeFloorItems(getLayerFloorItems(layerId)),
       });
     }
 
@@ -2163,7 +2180,7 @@ adminiNs.on('connection', (socket) => {
 
   socket.on('saveEnemyType', ({ id, ...fields }) => {
     if (!id || typeof id !== 'string') return;
-    const allowed = ['name', 'char', 'color', 'hp', 'damage', 'armor', 'moveSpeed', 'sightRange', 'ownership', 'attackRange', 'attackSpeed', 'incorporeal'];
+    const allowed = ['name', 'char', 'color', 'hp', 'damage', 'armor', 'moveSpeed', 'sightRange', 'ownership', 'attackRange', 'attackSpeed', 'incorporeal', 'behavior', 'minLayer'];
     const changes = {};
     for (const key of allowed) {
       if (fields[key] !== undefined) {
@@ -2242,6 +2259,28 @@ adminiNs.on('connection', (socket) => {
 
     executeTransition(playerId, targetLayerId);
     socket.emit('adminTeleportResult', { success: true, message: `Teleported ${p.name || 'player'} to L${targetLayerId}` });
+  });
+
+  // --- Admin list management ---
+  socket.on('getAdmins', () => {
+    socket.emit('adminList', saveManager.getAdmins());
+  });
+
+  socket.on('addAdmin', async ({ username }) => {
+    if (!username) return;
+    const added = await saveManager.addAdmin(username);
+    socket.emit('adminList', saveManager.getAdmins());
+    if (added) console.log(`Admin added: ${username} (by ${session.username})`);
+  });
+
+  socket.on('removeAdmin', async ({ username }) => {
+    if (!username) return;
+    if (username.toLowerCase() === session.username.toLowerCase()) {
+      return; // can't remove yourself
+    }
+    const removed = await saveManager.removeAdmin(username);
+    socket.emit('adminList', saveManager.getAdmins());
+    if (removed) console.log(`Admin removed: ${username} (by ${session.username})`);
   });
 
   socket.on('disconnect', () => {
@@ -2423,6 +2462,24 @@ setInterval(() => {
       handlePlayerDeath(id);
     }
   }
+
+  // Horror sanity drain: check proximity of horror/devourer to players
+  for (const [id, p] of players) {
+    if (!p.stats) continue;
+    const playerLayerId = layerManager.getPlayerLayerId(id);
+    const layerEnemies = enemyManager.getEnemiesOnLayer(playerLayerId);
+    let drainTotal = 0;
+    for (const e of layerEnemies) {
+      if (e.behavior !== 'relentless') continue; // only horrors/devourers
+      const d = Math.abs(e.x - p.x) + Math.abs(e.y - p.y);
+      if (d <= 5) drainTotal += 2;
+    }
+    if (drainTotal > 0 && p.stats.sanity > 0) {
+      p.stats.sanity = Math.max(0, p.stats.sanity - drainTotal);
+      const sock = io.sockets.sockets.get(id);
+      if (sock) sock.emit('damage', { stats: p.stats });
+    }
+  }
 }, 5000);
 
 // Enemy AI tick: every 200ms
@@ -2473,6 +2530,14 @@ setInterval(() => {
     const reducedDamage = Math.max(1, p.activeDamage - closest.armor);
     closest.hp -= reducedDamage;
     closest.bleedStacks += Math.floor(reducedDamage / 5);
+
+    // Cowardly behavior: flee when low HP
+    if (closest.behavior === 'cowardly' && closest.hp > 0 && closest.hp <= closest.maxHp * 0.4 && closest.state !== 'flee') {
+      closest.state = 'flee';
+      closest.stateTime = now;
+      closest.path = null;
+      closest._stateChanged = true;
+    }
     // poisonOnHit: add extra bleed stacks from equipment
     for (const eff of p.equipEffects) {
       if (eff.poisonOnHit) closest.bleedStacks += eff.poisonOnHit;

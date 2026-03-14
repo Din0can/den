@@ -1,10 +1,39 @@
 import { TILE_SIZE, TILE, TILE_META, COLORS } from './config.js';
 import { CHUNK_SIZE, chunkKey, chunkIndex } from './chunk.js';
+import { drawSprite } from './sprites.js';
+
+const RARITY_COLORS = { common: '#888888', uncommon: '#5a8a5a', rare: '#4a7a9a', epic: '#7a5a8a', legendary: '#9a7a3a' };
 
 let ctx;
 const FONT_SIZE = TILE_SIZE;
 const FONT = `${FONT_SIZE}px 'JetBrains Mono', monospace`;
 const SMALL_FONT = `${Math.floor(FONT_SIZE * 0.55)}px 'JetBrains Mono', monospace`;
+
+/** Resolve a color string to a canvas fillStyle (handles gradient: prefix, with caching) */
+const _gradCache = new Map(); // color string -> { grad, px, py, h }
+let _gradCacheFrame = 0;
+
+function resolveColor(color, px, py, h) {
+  if (typeof color === 'string' && color.startsWith('gradient:')) {
+    const parts = color.slice(9).split(':');
+    if (parts.length >= 2) {
+      const gh = h || TILE_SIZE;
+      const grad = ctx.createLinearGradient(px, py, px, py + gh);
+      grad.addColorStop(0, parts[0]);
+      grad.addColorStop(1, parts[1]);
+      return grad;
+    }
+  }
+  return color;
+}
+
+/** Resolve color but use first gradient color as solid (for batch tile rendering) */
+function resolveColorSolid(color) {
+  if (typeof color === 'string' && color.startsWith('gradient:')) {
+    return color.slice(9).split(':')[0];
+  }
+  return color;
+}
 
 // Bone-sacred tiles (same as server): floor, doors, grass, entry
 const BONE_SACRED = new Set([TILE.FLOOR, TILE.DOOR_CLOSED, TILE.DOOR_OPEN, TILE.GRASS, TILE.ENTRY]);
@@ -55,14 +84,15 @@ function drawPlayers(playersMap, cameraX, cameraY) {
     const py = (p.y - cameraY) * TILE_SIZE;
 
     // Draw @ marker
-    ctx.fillStyle = p.color || '#888';
+    ctx.fillStyle = resolveColor(p.color || '#888', px, py, TILE_SIZE);
     ctx.fillText('@', px + 2, py + 1);
 
     // Draw name label above
     if (p.name) {
       ctx.font = SMALL_FONT;
-      ctx.fillStyle = p.color || '#888';
-      ctx.fillText(p.name, px + 2, py - FONT_SIZE * 0.5);
+      const ny = py - FONT_SIZE * 0.5;
+      ctx.fillStyle = resolveColor(p.color || '#888', px, ny, FONT_SIZE * 0.55);
+      ctx.fillText(p.name, px + 2, ny);
       ctx.font = FONT;
     }
   }
@@ -99,6 +129,32 @@ function drawEnemies(enemiesMap, cameraX, cameraY) {
       ctx.font = SMALL_FONT;
       ctx.fillText('search', px + 2, py - FONT_SIZE * 0.5);
       ctx.font = FONT;
+    }
+  }
+}
+
+/** Draw floor items on the map */
+function drawFloorItems(floorItemsMap, cameraX, cameraY, cols, rows) {
+  if (!floorItemsMap || floorItemsMap.size === 0) return;
+
+  ctx.font = FONT;
+  ctx.textBaseline = 'top';
+
+  for (const [key, item] of floorItemsMap) {
+    const [x, y] = key.split(',').map(Number);
+    const sx = x - cameraX;
+    const sy = y - cameraY;
+    if (sx < -1 || sx > cols + 1 || sy < -1 || sy > rows + 1) continue;
+
+    const px = sx * TILE_SIZE;
+    const py = sy * TILE_SIZE;
+
+    if (item.sprite && drawSprite(ctx, item.sprite, item.rarity, px + TILE_SIZE / 2, py + TILE_SIZE / 2, TILE_SIZE)) {
+      // rendered as sprite
+    } else {
+      const rarityStr = typeof item.rarity === 'object' ? item.rarity?.name : item.rarity;
+      ctx.fillStyle = RARITY_COLORS[rarityStr] || '#ccaa00';
+      ctx.fillText(item.char || '?', px + 2, py + 1);
     }
   }
 }
@@ -280,7 +336,7 @@ function adminiRenderShops(gameMap, cameraX, cameraY, cols, rows, editState) {
 }
 
 /** Standard render: static layers or player composited view + player markers */
-export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, editState = null, enemiesMap = null) {
+export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, editState = null, enemiesMap = null, floorItemsMap = null) {
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
 
@@ -341,6 +397,9 @@ export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, ed
     }
   }
 
+  // Draw floor items
+  drawFloorItems(floorItemsMap, cameraX, cameraY, cols, rows);
+
   // Draw player markers
   drawPlayers(playersMap, cameraX, cameraY);
 
@@ -362,7 +421,7 @@ export function adminiRender(gameMap, cameraX, cameraY, playersMap, zoom = 1, ed
 }
 
 /** Mother view: bones in white, each player's wing in their color, player markers */
-export function adminiRenderMother(motherData, cameraX, cameraY, zoom = 1, enemiesMap = null) {
+export function adminiRenderMother(motherData, cameraX, cameraY, zoom = 1, enemiesMap = null, floorItemsMap = null) {
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
 
@@ -394,51 +453,31 @@ export function adminiRenderMother(motherData, cameraX, cameraY, zoom = 1, enemi
   ctx.font = FONT;
   ctx.textBaseline = 'top';
 
-  // Build a per-tile wing color lookup for visible area
-  // We iterate per-tile: first check bones, then check wings
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < cols; col++) {
-      const mx = cameraX + col;
-      const my = cameraY + row;
-      const px = col * TILE_SIZE;
-      const py = row * TILE_SIZE;
+  // Use pre-built composite cache for fast rendering
+  const composite = motherData.composite;
+  if (composite && composite.size > 0) {
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const mx = cameraX + col;
+        const my = cameraY + row;
+        const entry = composite.get(`${mx},${my}`);
+        if (!entry) continue;
 
-      // Check bone tile
-      const boneTile = motherData.boneMap.getTile(mx, my);
+        const meta = TILE_META[entry.tile];
+        if (!meta) continue;
 
-      // Check wing tiles (last wing wins for overlap)
-      let wingTile = TILE.VOID;
-      let wingColor = null;
-      for (const [, wing] of motherData.wings) {
-        const wt = wing.gameMap.getTile(mx, my);
-        if (wt !== TILE.VOID) {
-          wingTile = wt;
-          wingColor = wing.color;
-        }
+        const px = col * TILE_SIZE;
+        const py = row * TILE_SIZE;
+
+        // Use solid fallback for wing gradient colors on tiles (gradients on tiny tiles are wasteful)
+        ctx.fillStyle = resolveColorSolid(entry.color);
+        ctx.fillText(meta.char, px + 2, py + 1);
       }
-
-      // Compositing: bone sacred always shows, wing overrides non-sacred
-      let tile, color;
-      if (BONE_SACRED.has(boneTile)) {
-        tile = boneTile;
-        color = '#ffffff'; // bones in white
-      } else if (wingTile !== TILE.VOID) {
-        tile = wingTile;
-        color = wingColor;
-      } else if (boneTile !== TILE.VOID) {
-        tile = boneTile;
-        color = '#777777'; // bone walls in dim white
-      } else {
-        continue; // void, skip
-      }
-
-      const meta = TILE_META[tile];
-      if (!meta) continue;
-
-      ctx.fillStyle = color;
-      ctx.fillText(meta.char, px + 2, py + 1);
     }
   }
+
+  // Draw floor items
+  drawFloorItems(floorItemsMap, cameraX, cameraY, cols, rows);
 
   // Draw player markers
   drawPlayers(motherData.players, cameraX, cameraY);
