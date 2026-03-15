@@ -10,6 +10,7 @@ let renderCallback = null;
 const TARGET_FPS = 30;
 const FRAME_INTERVAL = 1000 / TARGET_FPS;
 let lastFrameTime = 0;
+let ctx2d = null;
 
 function compileShader(src, type) {
   const shader = gl.createShader(type);
@@ -51,13 +52,31 @@ export function resize(crtHeight) {
   canvas.height = h * dpr;
   canvas.style.width = w + 'px';
   canvas.style.height = h + 'px';
-  gl.viewport(0, 0, canvas.width, canvas.height);
+  if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
 }
 
 export function resizeTexture() {
   if (!gl || !texture || !gameCanvas) return;
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, gameCanvas);
+}
+
+function frameFallback(now) {
+  requestAnimationFrame(frameFallback);
+  if (now - lastFrameTime < FRAME_INTERVAL) return;
+  lastFrameTime = now;
+  if (renderCallback) renderCallback(now);
+  ctx2d.drawImage(gameCanvas, 0, 0, canvas.width, canvas.height);
+}
+
+function startFallback() {
+  gl = null;
+  ctx2d = canvas.getContext('2d');
+  ctx2d.imageSmoothingEnabled = false;
+  resize(window.innerHeight - viewport.hudHeight);
+  lastTime = performance.now();
+  requestAnimationFrame(frameFallback);
+  return true;
 }
 
 function frame(now) {
@@ -110,8 +129,8 @@ export async function init(onRender) {
       || canvas.getContext('experimental-webgl', { alpha: false, premultipliedAlpha: false });
   }
   if (!gl) {
-    console.error('WebGL not supported');
-    return false;
+    console.warn('WebGL not supported – using 2D fallback');
+    return startFallback();
   }
 
   // Fullscreen quad
@@ -142,12 +161,15 @@ export async function init(onRender) {
     vertSrc = await results[0].text();
     fragSrc = await results[1].text();
   } catch (e) {
-    console.error('Failed to load shaders:', e);
-    return false;
+    console.warn('Failed to load shaders – using 2D fallback:', e);
+    return startFallback();
   }
 
   program = createProgram(vertSrc, fragSrc);
-  if (!program) return false;
+  if (!program) {
+    console.warn('Shader compilation failed – using 2D fallback');
+    return startFallback();
+  }
 
   gl.useProgram(program);
 

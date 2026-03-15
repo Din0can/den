@@ -280,6 +280,11 @@ function setupNetworkHandlers() {
     }
   });
 
+  network.onConnectError(() => {
+    showMenu();
+    showMenuError('Connection failed. Try again.');
+  });
+
   network.onPlayerJoined((data) => {
     const ent = new Entity(data.id, data.spawn.x, data.spawn.y, '@', data.color || '#888888', data.name || '', data.facing || 'south');
     ent.lightRadius = data.lightRadius || 0;

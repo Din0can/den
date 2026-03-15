@@ -56,6 +56,10 @@ export function connect(authData) {
   socket.on('floorItemRemoved', (data) => handlers.onFloorItemRemoved?.(data));
 
   socket.on('connect', () => console.log('Connected:', socket.id));
+  socket.on('connect_error', (err) => {
+    console.error('Connection failed:', err.message);
+    handlers.onConnectError?.(err);
+  });
   socket.on('disconnect', (reason) => {
     console.log('Disconnected:', reason);
     handlers.onDisconnect?.(reason);
@@ -89,6 +93,7 @@ export function onRemoteCombatHit(fn) { handlers.onRemoteCombatHit = fn; }
 export function onFloorItemAdded(fn) { handlers.onFloorItemAdded = fn; }
 export function onFloorItemRemoved(fn) { handlers.onFloorItemRemoved = fn; }
 export function onDisconnect(fn) { handlers.onDisconnect = fn; }
+export function onConnectError(fn) { handlers.onConnectError = fn; }
 
 export function sendState(x, y, facing) {
   if (!socket) return;
