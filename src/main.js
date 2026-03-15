@@ -6,8 +6,9 @@ import { GameMap } from './game-map.js';
 import { Entity } from './entity.js';
 import { Camera } from './camera.js';
 import { initInput, initHotbarInput, getMovementDir, consumeInteract, consumeDrop, initShopInput, destroyShopInput } from './input.js';
-import { initHotbar, getState as getHotbarState, setAllSlots, setEquipment, setEquipAnim, getEquipAnim, enterShopMode, exitShopMode, updateShopData, getShopState, selectSlot } from './hotbar.js';
-import { getSlotCenter, getEquipSlotCenter, renderShopOverlay, SHOP_CANVAS_H } from './hotbar-renderer.js';
+import { initHotbar, getState as getHotbarState, setAllSlots, setEquipment, setEquipAnim, getEquipAnim, enterShopMode, exitShopMode, updateShopData, getShopState, selectSlot, selectEquipSlot } from './hotbar.js';
+import { getSlotCenter, getEquipSlotCenter, renderShopOverlay, SHOP_CANVAS_H, hitTestSlot, hitTestEquipSlot } from './hotbar-renderer.js';
+import { initMobileControls, initHudTouch } from './mobile.js';
 import { initRenderer, render } from './game-renderer.js';
 import { initHudRenderer, resizeHud, renderHud } from './hud-renderer.js';
 import { hudInfo, updateHUD } from './hud.js';
@@ -178,6 +179,8 @@ function init() {
   initInput();
   initHotbar();
   initHotbarInput(hudCanvas);
+  initMobileControls();
+  initHudTouch(hudCanvas, hitTestSlot, hitTestEquipSlot, selectSlot, selectEquipSlot, getHotbarState);
   window.addEventListener('resize', debouncedResize);
 
   // Set up network event handlers before connecting

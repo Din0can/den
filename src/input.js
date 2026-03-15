@@ -2,10 +2,15 @@ import { selectSlot, cycleSlot, selectEquipSlot, startDrag, updateDrag, endDrag,
 import { hitTestSlot, hitTestEquipSlot, hitTestShopSlot } from './hotbar-renderer.js';
 import { sendEquipItem, sendUnequipItem, sendUseItem, sendSwapSlots, sendCloseShop } from './network.js';
 
-const keys = {};
+export const keys = {};
 let interactPressed = false;
 let escapePressed = false;
 let dropPressed = false;
+
+// Mobile action triggers
+export function triggerInteract() { interactPressed = true; }
+export function triggerDrop() { dropPressed = true; }
+export function triggerEscape() { escapePressed = true; }
 let lastClickTime = 0;
 let lastClickSlot = -1;
 let lastClickEquip = null;
@@ -226,10 +231,6 @@ export function initHotbarInput(hudCanvas) {
       cancelDrag();
     }
   });
-}
-
-export function triggerInteract() {
-  interactPressed = true;
 }
 
 export function initShopInput(shopCanvas) {

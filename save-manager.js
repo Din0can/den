@@ -14,6 +14,19 @@ const sessions = new Map();    // sessionToken -> usernameLower
 const connectedUsers = new Map(); // usernameLower -> socketId (for duplicate detection)
 let adminList = [];            // lowercase usernames
 
+const MAX_SESSIONS_PER_USER = 5; // Keep only latest N sessions per user
+
+function cleanupSessions(usernameLower) {
+  // Remove old sessions for this user, keep only MAX_SESSIONS_PER_USER
+  const userTokens = [];
+  for (const [token, user] of sessions) {
+    if (user === usernameLower) userTokens.push(token);
+  }
+  while (userTokens.length > MAX_SESSIONS_PER_USER) {
+    sessions.delete(userTokens.shift()); // Remove oldest
+  }
+}
+
 // Debounced writes
 const pendingWrites = new Map(); // usernameLower -> timeout
 
@@ -37,6 +50,7 @@ function validateUsername(name) {
 function validatePassword(password) {
   if (!password || typeof password !== 'string') return 'Password is required';
   if (password.length < 4) return 'Password must be at least 4 characters';
+  if (password.length > 128) return 'Password must be 128 characters or fewer';
   return null;
 }
 
@@ -157,6 +171,7 @@ export async function register(username, password, color) {
 
   const token = randomUUID();
   sessions.set(token, lower);
+  cleanupSessions(lower);
   writeSessions();
 
   return { success: true, token, username, color };
@@ -174,6 +189,7 @@ export async function login(username, password) {
 
   const token = randomUUID();
   sessions.set(token, lower);
+  cleanupSessions(lower);
   writeSessions();
 
   return { success: true, token, username: save.username, saveData: getSafeData(save) };

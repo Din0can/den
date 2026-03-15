@@ -306,6 +306,10 @@ function handlePlayerDeath(playerId) {
   const sock = io.sockets.sockets.get(playerId);
   if (!sock) return;
 
+  // Clear shop state if open
+  delete p.openShopId;
+  delete p.openShopLayerId;
+
   if (p.username && saveManager.hasSavePoint(p.username)) {
     // Registered player with a save — restore to last save point
     const save = saveManager.getSave(p.username);
@@ -1355,12 +1359,15 @@ io.on('connection', async (socket) => {
     const item = fi.get(key);
     if (!item) return;
 
+    // Delete from floor FIRST to prevent race condition (two players picking up same item)
+    fi.delete(key);
+
     if (!addToInventory(p, { ...item })) {
+      // Inventory full - put item back on floor
+      fi.set(key, item);
       socket.emit('containerResult', { message: 'Inventory full!' });
       return;
     }
-
-    fi.delete(key);
     sendInventoryUpdate(socket, p);
     socket.emit('containerResult', { message: `Picked up: ${item.name}` });
     socket.to(`layer:${currentLayerId}`).emit('floorItemRemoved', { x: p.x, y: p.y });

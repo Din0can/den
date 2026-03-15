@@ -1,7 +1,9 @@
 import { TILE_SIZE } from './config.js';
 
-const MIN_COLS = 40;
-const MIN_ROWS = 21;
+const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+const MIN_COLS = isMobile ? 16 : 40;
+const MIN_ROWS = isMobile ? 10 : 21;
 const MAX_COLS = 60;
 const MAX_ROWS = 35;
 

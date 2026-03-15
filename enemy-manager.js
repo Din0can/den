@@ -844,6 +844,13 @@ export class EnemyManager {
 
     const d = dist(enemy.x, enemy.y, visiblePlayer.x, visiblePlayer.y);
     const targetPlayer = players.get(visiblePlayer.id);
+    if (!targetPlayer) {
+      enemy.state = 'search';
+      enemy.stateTime = now;
+      enemy.path = null;
+      enemy._stateChanged = true;
+      return;
+    }
 
     // Check if target is "alone" (no other players nearby)
     let targetAlone = true;

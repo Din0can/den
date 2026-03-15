@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
   <title>KRAKEN2004</title>
   <style>
     @font-face {
@@ -62,6 +62,7 @@
       justify-content: center;
       font-family: 'JetBrains Mono', monospace;
       color: #888;
+      overflow-y: auto;
     }
     #menu-overlay.hidden { display: none; }
 
@@ -311,6 +312,95 @@
       min-height: 14px;
       text-align: center;
     }
+
+    /* --- Mobile virtual controls --- */
+    #mobile-controls {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 15;
+      pointer-events: none;
+    }
+    #mobile-dpad {
+      position: absolute;
+      left: 12px;
+      bottom: 145px;
+      width: 120px;
+      height: 120px;
+      pointer-events: auto;
+    }
+    .dpad-btn {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 6px;
+      color: rgba(255,255,255,0.4);
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+    .dpad-btn:active, .dpad-btn.pressed { background: rgba(255,255,255,0.25); }
+    .dpad-up    { left: 40px; top: 0; }
+    .dpad-down  { left: 40px; bottom: 0; }
+    .dpad-left  { left: 0; top: 40px; }
+    .dpad-right { right: 0; top: 40px; }
+
+    #mobile-actions {
+      position: absolute;
+      right: 12px;
+      bottom: 145px;
+      display: flex;
+      gap: 8px;
+      pointer-events: auto;
+    }
+    .action-btn {
+      width: 48px;
+      height: 48px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 50%;
+      color: rgba(255,255,255,0.4);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+    .action-btn:active, .action-btn.pressed { background: rgba(255,255,255,0.25); }
+
+    #mobile-rotate-hint {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: #000;
+      color: #555;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+
+    /* --- Mobile media queries --- */
+    @media (max-width: 768px) {
+      #menu-box { min-width: 200px; }
+      .color-swatches { max-width: 320px; }
+      .color-swatch { width: 22px; height: 22px; font-size: 14px; }
+      #register-prompt-box { padding: 16px; }
+    }
+    @media (orientation: portrait) and (max-height: 600px) {
+      #mobile-rotate-hint { display: flex; }
+    }
   </style>
 </head>
 <body>
@@ -319,7 +409,7 @@
     <div id="menu-title">KRAKEN2004</div>
     <div id="menu-box">
       <label>Username</label>
-      <input type="text" id="menu-username" maxlength="16" autocomplete="username" spellcheck="false">
+      <input type="text" id="menu-username" maxlength="16" autocomplete="username" spellcheck="false" inputmode="text" style="font-size:16px">
       <label>Password</label>
       <input type="password" id="menu-password" autocomplete="current-password">
       <div class="menu-btn-row">
@@ -368,6 +458,23 @@
       <div id="register-prompt-error"></div>
     </div>
   </div>
+
+  <!-- Mobile virtual controls -->
+  <div id="mobile-controls">
+    <div id="mobile-dpad">
+      <div class="dpad-btn dpad-up" data-dir="up">^</div>
+      <div class="dpad-btn dpad-left" data-dir="left">&lt;</div>
+      <div class="dpad-btn dpad-right" data-dir="right">&gt;</div>
+      <div class="dpad-btn dpad-down" data-dir="down">v</div>
+    </div>
+    <div id="mobile-actions">
+      <div class="action-btn" data-action="interact">E</div>
+      <div class="action-btn" data-action="drop">X</div>
+    </div>
+  </div>
+
+  <!-- Portrait rotate hint -->
+  <div id="mobile-rotate-hint">Rotate your device for the best experience</div>
 
   <canvas id="game-canvas"></canvas>
   <canvas id="crt-canvas"></canvas>
