@@ -1,20 +1,20 @@
 services:
   app:
     build: .
-    container_name: Dinos-den
+    container_name: Dinos-kraken
     restart: always
     networks:
       - proxy
     labels:
-      description: "dungeon.d1no.dev - Multiplayer CRT dungeon crawler"
+      description: "kraken.d1no.dev - KRAKEN2004 Multiplayer CRT dungeon crawler"
       maintainer: "Dino"
-      homepage: "https://dungeon.d1no.dev"
+      homepage: "https://kraken.d1no.dev"
       com.docker.compose.project: "den"
       traefik.enable: "true"
-      traefik.http.routers.den.rule: "Host(`dungeon.d1no.dev`)"
-      traefik.http.routers.den.entrypoints: "websecure"
-      traefik.http.routers.den.tls.certresolver: "letsencrypt"
-      traefik.http.services.den.loadbalancer.server.port: "3000"
+      traefik.http.routers.kraken.rule: "Host(`kraken.d1no.dev`)"
+      traefik.http.routers.kraken.entrypoints: "websecure"
+      traefik.http.routers.kraken.tls.certresolver: "letsencrypt"
+      traefik.http.services.kraken.loadbalancer.server.port: "3000"
     volumes:
       - ./data:/app/data
     healthcheck:
