@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 *.log
+data/saves/
+Kraken2004/

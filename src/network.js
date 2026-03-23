@@ -185,11 +185,6 @@ export function sendDropItem(slot, isEquip) {
   throttledEmit('dropItem', { slot, isEquip });
 }
 
-export function sendDebugSanity(sanity) {
-  if (!socket) return;
-  socket.emit('debugSanity', { sanity });
-}
-
 export function sendRegisterFromGame(username, password, color) {
   if (!socket) return;
   socket.emit('registerFromGame', { username, password, color });

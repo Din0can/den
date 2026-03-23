@@ -49,6 +49,8 @@ let connected = false;
 let isGuest = false;
 let fovDirty = true;
 let currentLayerId = null;
+let layerEntryUp = null;
+let layerEntryDown = null;
 let onEntryTile = false;
 let localStats = null;
 let gameCanvas;
@@ -105,6 +107,8 @@ function debouncedResize() {
 function loadLayer(meta, initialChunks) {
   openedContainers.clear();
   currentLayerId = meta.id;
+  layerEntryUp = meta.entryUp || null;
+  layerEntryDown = meta.entryDown || null;
   gameMap.initBounds(meta.bounds);
   gameMap.loadChunks(initialChunks);
   lastChunkX = -999;
@@ -621,13 +625,6 @@ function setupNetworkHandlers() {
     gameMap.removeFloorItem(data.x, data.y);
   });
 
-  // Debug: F9 toggles sanity between 10 and 100 (for testing enemies)
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'F9') {
-      const newSanity = (localStats?.sanity ?? 100) > 50 ? 10 : 100;
-      network.sendDebugSanity(newSanity);
-    }
-  });
 }
 
 function buildHintLine2(item) {
@@ -848,8 +845,11 @@ function gameLoop(now) {
     }
   }
 
+  // Check if player has a map in inventory
+  const hasMap = hotbarForHint.slots.some(s => s?.effect?.minimap);
+
   // Render
-  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos, facingContainer, containerFloatMsg, facingShop, enemies, combatEffects, standingOnFloorItem);
+  render(gameMap, camera, localEntity, remotePlayers.values(), fog, onEntryTile, nearbyInfos, facingContainer, containerFloatMsg, facingShop, enemies, combatEffects, standingOnFloorItem, hasMap, layerEntryDown);
   renderHud(hudInfo);
 }
 

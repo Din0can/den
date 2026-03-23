@@ -17,8 +17,8 @@ const SPAWN_MIN_DIST = 12;       // minimum distance from player to spawn
 const WANDER_RADIUS = 8;         // tile radius for wander target selection
 const SEARCH_RADIUS = 5;         // tile radius for search wandering
 const FLEE_DURATION = 5000;      // ms to flee before despawning (cowardly)
-const RETREAT_DURATION = 2000;   // ms to pause after retreating (hitAndRun)
-const RETREAT_DIST = 5;          // tiles to retreat before pausing
+const RETREAT_DURATION = 4000;   // ms to pause after retreating (hitAndRun)
+const RETREAT_DIST = 10;         // tiles to retreat before pausing
 const STALK_DIST = 8;            // min distance stalkers keep from target
 const AMBUSH_ALONE_RANGE = 8;    // no allies within this range = "alone"
 const HORROR_SANITY_RANGE = 5;   // tiles within which horror drains sanity
@@ -28,6 +28,18 @@ const COWARDLY_FLEE_THRESHOLD = 0.4; // HP ratio to trigger flee
 function isPassableTile(tileId) {
   const meta = TILE_META[tileId];
   return meta ? meta.passable : false;
+}
+
+function weightedRandomType(types, weights) {
+  let total = 0;
+  for (const t of types) total += weights[t] || 0;
+  if (total <= 0) return types[Math.floor(Math.random() * types.length)];
+  let r = Math.random() * total;
+  for (const t of types) {
+    r -= weights[t] || 0;
+    if (r <= 0) return t;
+  }
+  return types[types.length - 1];
 }
 
 /**
@@ -106,6 +118,7 @@ export class EnemyManager {
 
     // Tick each enemy
     for (const [enemyId, enemy] of this.enemies) {
+      if (enemy._despawned) continue;
       const layer = layerManager.getLayer(enemy.layerId);
       if (!layer) continue;
       this._tickEnemy(enemy, players, layer, layerManager, now, { applyFlatDamage, getLayerBlood, dropBlood, splatter, io });
@@ -143,7 +156,7 @@ export class EnemyManager {
     const playerTypes = depthTypes.filter(t => ENEMY_TYPES[t].ownership === 'player');
 
     if (playerEnemyCount < bracket.maxEnemies && playerTypes.length > 0) {
-      const type = playerTypes[Math.floor(Math.random() * playerTypes.length)];
+      const type = weightedRandomType(playerTypes, bracket.weights);
       this._spawnEnemy(type, 'player', playerId, null, player, layer, layerId);
     }
 
@@ -184,7 +197,7 @@ export class EnemyManager {
     }
 
     if (layerEnemyCount < layerBracket.maxEnemies && layerTypes.length > 0) {
-      const type = layerTypes[Math.floor(Math.random() * layerTypes.length)];
+      const type = weightedRandomType(layerTypes, layerBracket.weights);
       this._spawnEnemy(type, 'layer', null, null, lowestPlayer, layer, layerId);
     }
   }
@@ -467,7 +480,7 @@ export class EnemyManager {
       const ownerSet = this.byOwner.get(enemy.ownerId);
       if (ownerSet) ownerSet.delete(enemyId);
     }
-    this.enemies.delete(enemyId);
+    // Don't delete from this.enemies — _broadcastUpdates will do it after sending the despawn message
   }
 
   // --- State handlers ---
@@ -764,12 +777,23 @@ export class EnemyManager {
 
     if (now - enemy.lastMoveTime < enemy.moveSpeed) return;
 
-    // Run away from target
+    // Run away from threat (directional)
     if (!enemy.path || enemy.pathIndex >= enemy.path.length) {
-      const target = getRandomWalkable(getTile, enemy.x, enemy.y, WANDER_RADIUS, new Set());
-      if (target) {
-        enemy.path = findPath(getTile, enemy.x, enemy.y, target.x, target.y, 300);
-        enemy.pathIndex = 1;
+      const dx = enemy.x - (enemy.lastKnownX || enemy.x);
+      const dy = enemy.y - (enemy.lastKnownY || enemy.y);
+      const len = Math.max(1, Math.abs(dx) + Math.abs(dy));
+      const fleeDist = WANDER_RADIUS + 4;
+      const tx = enemy.x + Math.round((dx / len) * fleeDist);
+      const ty = enemy.y + Math.round((dy / len) * fleeDist);
+      enemy.path = findPath(getTile, enemy.x, enemy.y, tx, ty, 300);
+      enemy.pathIndex = 1;
+      // Fallback to random if directional path fails
+      if (!enemy.path) {
+        const target = getRandomWalkable(getTile, enemy.x, enemy.y, WANDER_RADIUS, new Set());
+        if (target) {
+          enemy.path = findPath(getTile, enemy.x, enemy.y, target.x, target.y, 300);
+          enemy.pathIndex = 1;
+        }
       }
       if (!enemy.path) return;
     }
@@ -1059,7 +1083,9 @@ export class EnemyManager {
       enemy._spawned = false;
       enemy._moved = false;
       enemy._stateChanged = false;
-      enemy._despawned = false;
+      if (enemy._despawned) {
+        this.enemies.delete(eid);
+      }
     }
 
     // Send layer-based updates

@@ -157,7 +157,7 @@ function drawDoor(px, py, door) {
   }
 }
 
-export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos, showLootPrompt, containerFloatMsg, showShopPrompt, enemies, combatEffects, showPickupPrompt) {
+export function render(gameMap, camera, localEntity, entities, fog, showEntryPrompt, nearbyInfos, showLootPrompt, containerFloatMsg, showShopPrompt, enemies, combatEffects, showPickupPrompt, hasMap, entryDown) {
   const entityArray = Array.from(entities);
   const viewRows = viewport.rows;
 
@@ -664,4 +664,78 @@ export function render(gameMap, camera, localEntity, entities, fog, showEntryPro
     ctx.font = FONT;
   }
 
+  // Minimap
+  if (hasMap) {
+    renderMinimap(gameMap, localEntity, entryDown);
+  }
+}
+
+function renderMinimap(gameMap, localEntity, entryDown) {
+  const mapW = gameMap.width;
+  const mapH = gameMap.height;
+  if (mapW <= 0 || mapH <= 0) return;
+
+  const MAX_SIZE = 100;
+  const scale = Math.max(1, Math.min(2, Math.floor(MAX_SIZE / Math.max(mapW, mapH))));
+  const mmW = mapW * scale;
+  const mmH = mapH * scale;
+
+  const padding = 6;
+  const mmX = viewport.gameWidth - mmW - padding;
+  const mmY = padding;
+
+  // Background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+  ctx.fillRect(mmX - 3, mmY - 3, mmW + 6, mmH + 6);
+
+  // Draw explored tiles
+  for (let i = 0; i < gameMap.explored.length; i++) {
+    if (!gameMap.explored[i]) continue;
+    const lx = i % mapW;
+    const ly = (i / mapW) | 0;
+    const wx = lx + gameMap.offsetX;
+    const wy = ly + gameMap.offsetY;
+
+    const tile = gameMap.getTile(wx, wy);
+    const meta = TILE_META[tile];
+    if (!meta) continue;
+
+    if (tile === TILE.ENTRY) {
+      ctx.fillStyle = '#4a7a4a';
+    } else if (meta.blocksLight && !meta.passable) {
+      ctx.fillStyle = '#555';
+    } else if (meta.passable) {
+      ctx.fillStyle = '#282830';
+    } else {
+      ctx.fillStyle = '#3a3a3a';
+    }
+    ctx.fillRect(mmX + lx * scale, mmY + ly * scale, scale, scale);
+  }
+
+  // Exit beacon — highlight entryDown when player is within 20 tiles
+  if (entryDown) {
+    const dx = Math.abs(localEntity.x - entryDown.x);
+    const dy = Math.abs(localEntity.y - entryDown.y);
+    if (Math.max(dx, dy) <= 20) {
+      const ex = entryDown.x - gameMap.offsetX;
+      const ey = entryDown.y - gameMap.offsetY;
+      // Pulsing glow
+      const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.004);
+      const glow = Math.round(pulse * 255);
+      ctx.fillStyle = `rgb(0, ${glow}, ${Math.round(glow * 0.8)})`;
+      const beaconSize = scale + 2;
+      ctx.fillRect(mmX + ex * scale - 1, mmY + ey * scale - 1, beaconSize, beaconSize);
+    }
+  }
+
+  // Player dot
+  const plx = localEntity.x - gameMap.offsetX;
+  const ply = localEntity.y - gameMap.offsetY;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(mmX + plx * scale, mmY + ply * scale, scale, scale);
+
+  // Border
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(mmX - 0.5, mmY - 0.5, mmW + 1, mmH + 1);
 }

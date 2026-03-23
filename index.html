@@ -408,6 +408,59 @@
     @media (orientation: portrait) and (max-height: 600px) {
       #mobile-rotate-hint { display: flex; }
     }
+
+    /* --- Privacy overlay --- */
+    #privacy-link {
+      font-size: 10px;
+      color: #444;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    #privacy-link:hover { color: #666; }
+    #privacy-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: #000;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      font-family: 'JetBrains Mono', monospace;
+      color: #777;
+      overflow-y: auto;
+      padding: 40px 20px;
+    }
+    #privacy-overlay.show { display: flex; }
+    #privacy-content {
+      max-width: 500px;
+      font-size: 11px;
+      line-height: 1.6;
+    }
+    #privacy-content h2 {
+      color: #888;
+      font-size: 14px;
+      margin-bottom: 16px;
+      font-weight: normal;
+    }
+    #privacy-content h3 {
+      color: #777;
+      font-size: 11px;
+      margin-top: 14px;
+      margin-bottom: 4px;
+      font-weight: normal;
+    }
+    #privacy-content p { margin-bottom: 8px; }
+    #privacy-close {
+      margin-top: 20px;
+      background: none;
+      border: 1px solid #333;
+      color: #666;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 6px 16px;
+      cursor: pointer;
+    }
+    #privacy-close:hover { border-color: #555; color: #888; }
   </style>
 </head>
 <body>
@@ -427,6 +480,37 @@
       <button class="menu-btn" id="btn-guest">Play as Guest</button>
       <div id="menu-error"></div>
       <div id="menu-loading">Connecting...</div>
+      <div id="privacy-link">Privacy</div>
+    </div>
+  </div>
+
+  <!-- Privacy overlay -->
+  <div id="privacy-overlay">
+    <div id="privacy-content">
+      <h2>Privacy</h2>
+
+      <h3>What we collect</h3>
+      <p>If you register: your username, password (hashed, never stored in plaintext), chosen color, and game save data (position, inventory, stats). Guests have no data stored on the server.</p>
+
+      <h3>Why</h3>
+      <p>To let you save and resume your game across sessions and devices.</p>
+
+      <h3>Local storage</h3>
+      <p>A session token is stored in your browser's localStorage for automatic login. This is necessary for the game to function. No cookies are used.</p>
+
+      <h3>Third parties</h3>
+      <p>None. No analytics, no ads, no tracking. Your data is not shared with anyone.</p>
+
+      <h3>Where</h3>
+      <p>Data is stored on a server in Germany.</p>
+
+      <h3>Deletion</h3>
+      <p>To request deletion of your account and all associated data, contact dino@d1no.dev.</p>
+
+      <h3>Under 16</h3>
+      <p>If you are under 16, please play as a guest and do not register an account.</p>
+
+      <button id="privacy-close">Close</button>
     </div>
   </div>
 

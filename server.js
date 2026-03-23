@@ -1247,36 +1247,31 @@ io.on('connection', async (socket) => {
     if (!EQUIP_SLOTS.includes(targetSlot)) return;
 
     if (item.twoHanded) {
-      // Two-handed: need both mainHand and offHand empty (or swap)
       const mh = p.equipment.mainHand;
       const oh = p.equipment.offHand;
 
-      // Check if there's room for displaced items
-      let slotsNeeded = 0;
-      if (mh && mh !== oh) slotsNeeded++;
-      if (oh && oh !== mh) slotsNeeded++;
+      // Collect distinct displaced items (mh === oh for existing 2H weapon)
+      const displaced = [];
+      if (mh) displaced.push(mh);
+      if (oh && oh !== mh) displaced.push(oh);
+
+      // Check room: source slot frees up, so count it as empty
       let emptyCount = 0;
       for (let i = 0; i < 8; i++) {
         if (!p.inventory[i] || i === slot) emptyCount++;
       }
-      if (emptyCount < slotsNeeded) return;
+      if (emptyCount < displaced.length) return;
 
-      // Clear weapon slot first so it's available for displaced items
       p.inventory[slot] = null;
 
-      if (mh && mh !== oh) {
+      for (const d of displaced) {
         for (let i = 0; i < 8; i++) {
-          if (!p.inventory[i]) { p.inventory[i] = mh; break; }
-        }
-      }
-      if (oh && oh !== mh) {
-        for (let i = 0; i < 8; i++) {
-          if (!p.inventory[i]) { p.inventory[i] = oh; break; }
+          if (!p.inventory[i]) { p.inventory[i] = d; break; }
         }
       }
 
       p.equipment.mainHand = item;
-      p.equipment.offHand = item; // Same reference, OH dimmed on client
+      p.equipment.offHand = item;
     } else {
       // Single slot equip
       const existing = p.equipment[targetSlot];
@@ -1684,14 +1679,6 @@ io.on('connection', async (socket) => {
     const pLayerId = layerManager.getPlayerLayerId(id);
     socket.to(`layer:${pLayerId}`).emit('playerState', { id, color: p.color, name: p.name });
     broadcastLayerList();
-  });
-
-  socket.on('debugSanity', (data) => {
-    const p = players.get(id);
-    if (!p || typeof data.sanity !== 'number') return;
-    p.stats.sanity = Math.max(0, Math.min(100, data.sanity));
-    socket.emit('damage', { stats: p.stats });
-    console.log(`[DEBUG] Player ${id} sanity set to ${p.stats.sanity}`);
   });
 
   socket.on('disconnect', () => {

@@ -1053,5 +1053,23 @@
     "description": "Defies death itself. Revives all severed limbs. Full heal.",
     "sprite": "potion_red",
     "value": 200
+  },
+  "dungeon_map": {
+    "id": "dungeon_map",
+    "name": "Dungeon Map",
+    "char": "M",
+    "type": "material",
+    "slot": null,
+    "rarity": "uncommon",
+    "stackable": false,
+    "maxStack": 1,
+    "armor": 0,
+    "damage": 0,
+    "twoHanded": false,
+    "minLayer": 0,
+    "effect": { "minimap": true },
+    "description": "Crude parchment. Reveals where you've been.",
+    "sprite": null,
+    "value": 15
   }
 }

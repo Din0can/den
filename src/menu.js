@@ -141,6 +141,20 @@ export function clearSessionToken() {
 export function initMenu(connectFn) {
   onAuth = connectFn;
 
+  // Privacy overlay
+  const privacyLink = document.getElementById('privacy-link');
+  const privacyOverlay = document.getElementById('privacy-overlay');
+  const privacyClose = document.getElementById('privacy-close');
+  if (privacyLink && privacyOverlay) {
+    privacyLink.addEventListener('click', () => privacyOverlay.classList.add('show'));
+    privacyClose?.addEventListener('click', () => privacyOverlay.classList.remove('show'));
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && privacyOverlay.classList.contains('show')) {
+        privacyOverlay.classList.remove('show');
+      }
+    });
+  }
+
   const overlay = document.getElementById('menu-overlay');
   const usernameInput = document.getElementById('menu-username');
   const passwordInput = document.getElementById('menu-password');

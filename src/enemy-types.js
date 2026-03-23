@@ -16,14 +16,15 @@ export const ENEMY_TYPES = {
 // All enemy type IDs for bracket reference
 const ALL_TYPES = ['rat', 'spider', 'crawler', 'stalker', 'shadow', 'wraith', 'horror', 'devourer'];
 
-// Sanity brackets: as sanity drops, more enemies spawn
-// Actual types filtered by minLayer at spawn time
+// Sanity brackets: as sanity drops, more enemies spawn with shifting type weights
+// Actual types filtered by minLayer at spawn time; weights control probability
 export const SANITY_BRACKETS = [
-  { min: 80, max: 100, maxEnemies: 0, types: [],                                                                  spawnInterval: Infinity },
-  { min: 60, max: 79,  maxEnemies: 2, types: ['rat'],                                                             spawnInterval: 15000 },
-  { min: 40, max: 59,  maxEnemies: 4, types: ['rat', 'spider', 'crawler'],                                        spawnInterval: 10000 },
-  { min: 20, max: 39,  maxEnemies: 5, types: ['rat', 'spider', 'crawler', 'stalker', 'shadow', 'wraith'],         spawnInterval: 8000 },
-  { min: 0,  max: 19,  maxEnemies: 8, types: ALL_TYPES,                                                           spawnInterval: 5000 },
+  { min: 96, max: 100, maxEnemies: 0, types: [],        weights: {},                                                                                                          spawnInterval: Infinity },
+  { min: 80, max: 95,  maxEnemies: 5, types: ALL_TYPES, weights: { rat: 20, spider: 1 },                                                                                     spawnInterval: 25000 },
+  { min: 60, max: 79,  maxEnemies: 6, types: ALL_TYPES, weights: { rat: 12, spider: 6, crawler: 3 },                                                                         spawnInterval: 20000 },
+  { min: 40, max: 59,  maxEnemies: 30, types: ALL_TYPES, weights: { rat: 5, spider: 7, crawler: 6, stalker: 5, shadow: 4, wraith: 3 },                                       spawnInterval: 15000 },
+  { min: 20, max: 39,  maxEnemies: 30, types: ALL_TYPES, weights: { rat: 2, spider: 4, crawler: 4, stalker: 7, shadow: 8, wraith: 6, horror: 4, devourer: 3 },               spawnInterval: 12000 },
+  { min: 0,  max: 19,  maxEnemies: 30, types: ALL_TYPES, weights: { rat: 1, spider: 2, crawler: 2, stalker: 5, shadow: 7, wraith: 7, horror: 10, devourer: 8 },              spawnInterval: 8000 },
 ];
 
 /**
